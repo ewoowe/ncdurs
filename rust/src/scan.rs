@@ -1,4 +1,4 @@
-/* ncdu-rs - scan phase
+/* ncdurs - scan phase
  *
  * Mirrors the model of the C implementation (src/dir_scan.c + src/dir_mem.c):
  * a directory's size is the sum of its own occupied space and the (already
@@ -216,7 +216,7 @@ mod tests {
 
     impl TempDir {
         fn new(tag: &str) -> TempDir {
-            let p = env::temp_dir().join(format!("ncdu-rs-test-{}-{}", tag, std::process::id()));
+            let p = env::temp_dir().join(format!("ncdurs-test-{}-{}", tag, std::process::id()));
             let _ = fs::remove_dir_all(&p);
             fs::create_dir_all(&p).unwrap();
             TempDir(p)

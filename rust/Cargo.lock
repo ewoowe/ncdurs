@@ -667,7 +667,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ncdu-rs"
+name = "ncdurs"
 version = "0.1.0"
 dependencies = [
  "ratatui",

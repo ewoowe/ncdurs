@@ -1,4 +1,4 @@
-/* ncdu-rs - platform specific bits
+/* ncdurs - platform specific bits
  *
  * Everything that differs between operating systems is funnelled through this
  * module, so the rest of the code stays portable:

@@ -1,4 +1,4 @@
-/* ncdu-rs - a minimal Rust reimplementation of ncdu
+/* ncdurs - a minimal Rust reimplementation of ncdu
  *
  * First version: scan a directory tree, then browse the result in a TUI.
  * See src/scan.rs (scanning), src/app.rs (state/keys) and src/ui.rs (drawing).

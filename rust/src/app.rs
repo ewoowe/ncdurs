@@ -1,4 +1,4 @@
-/* ncdu-rs - browsing state and key handling
+/* ncdurs - browsing state and key handling
  *
  * The counterpart of the C version's src/dirlist.c: it keeps track of the
  * currently opened directory, the sorted view of its children and the cursor.

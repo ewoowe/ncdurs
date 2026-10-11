@@ -1,4 +1,4 @@
-/* ncdu-rs - drawing code (ratatui), comparable to src/browser.c
+/* ncdurs - drawing code (ratatui), comparable to src/browser.c
  *
  * Layout: status bar, path bar, item list, totals line.
  */

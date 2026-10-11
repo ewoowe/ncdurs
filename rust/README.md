@@ -27,7 +27,7 @@ cargo build --release
 
 ## 用法
 
-```
+```text
 ncdurs [OPTIONS] [PATH]
 
 -a, --apparent-size   显示表观大小（apparent size）而不是磁盘占用
@@ -40,7 +40,7 @@ ncdurs [OPTIONS] [PATH]
 ### 按键
 
 | 按键 | 作用 |
-|---|---|
+| --- | --- |
 | `↑` / `k`、`↓` / `j` | 上下移动光标 |
 | `PgUp` / `PgDn` | 翻页 |
 | `g` / `G`（或 Home/End） | 跳到首项 / 末项 |
@@ -62,7 +62,7 @@ ncdurs [OPTIONS] [PATH]
 
 - 对同一目录，`Disk usage` / `Apparent size` / `Items` 三项与 `./ncdu` 完全一致（已在含硬链接的测试目录上对照验证）：
 
-  ```
+  ```text
   C  版 ./ncdu ：Total disk usage:  10.0 MiB   Apparent size:  10.0 MiB   Items: 5
   ncdurs      ：Disk usage: 10.0 MiB          Apparent size: 10.0 MiB   Items: 5
   ```
@@ -73,7 +73,7 @@ ncdurs [OPTIONS] [PATH]
 ## 跨平台
 
 | 平台 | "磁盘占用"取值方式 | 硬链接去重 | 状态 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Linux / macOS / *BSD | `st_blocks * 512` | `(st_dev, st_ino)` + `st_nlink` | 本机（Linux）已验证运行 |
 | Windows | `GetCompressedFileSizeW`（实际分配大小，兼容稀疏/压缩文件） | **暂未实现** | 通过 `cargo check`，未在真机运行 |
 
@@ -84,7 +84,7 @@ ncdurs [OPTIONS] [PATH]
 ## 项目结构
 
 | 文件 | 职责 | 对应 C 版 |
-|---|---|---|
+| --- | --- | --- |
 | `src/main.rs` | 参数解析、终端初始化/恢复、事件循环 | `src/main.c` |
 | `src/scan.rs` | 递归扫描、大小汇总、`Tree` / `Node` 数据结构 | `src/dir_scan.c` + `src/dir_mem.c` |
 | `src/platform.rs` | 平台差异：占用大小、文件标识、链接数 | （C 版内联在各处） |

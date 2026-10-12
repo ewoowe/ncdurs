@@ -207,9 +207,10 @@ cargo test
 与原版 ncdu 的对比脚本（数值 + 边界用例 + 性能，带 PASS/FAIL 断言）：
 
 ```bash
-cd rust && ./scripts/compare.sh            # 默认对比 /usr
-./scripts/compare.sh ~/some/dir --runs 3   # 指定目录、性能跑 3 轮
-./scripts/compare.sh --skip-perf           # 只做数值与边界用例
+cd rust
+bash scripts/compare.sh            # 默认对比 /usr
+bash scripts/compare.sh ~/some/dir --runs 3   # 指定目录、性能跑 3 轮
+bash scripts/compare.sh --skip-perf           # 只做数值与边界用例
 ```
 
 脚本会依次做：`du` 与两个版本的 disk usage 三方对照、apparent size 与 items 的两版对照、自动生成含硬链接/稀疏文件/符号链接/无权限目录的用例树再对照一次、最后测量「扫描到浏览界面出现」的耗时（min/avg）。全部通过时退出码 0。

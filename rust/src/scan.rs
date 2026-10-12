@@ -1,13 +1,26 @@
 /* ncdurs - scan phase
  *
- * Mirrors the model of the C implementation (src/dir_scan.c + src/dir_mem.c):
- * a directory's size is the sum of its own occupied space and the (already
- * accumulated) sizes of all its children. Hard links are counted only once by
- * keeping a global set of file identities. All OS specific details (occupied
- * size, file identity) live in platform.rs.
+ * Model (same as the C implementation, src/dir_scan.c + src/dir_mem.c):
+ * a directory's size is the sum of its own occupied space and the accumulated
+ * sizes of all its children. Hard links are counted only once via a global set
+ * of file identities; all OS specific details live in platform.rs.
+ *
+ * The walk is incremental: a Scanner keeps an explicit stack of directories
+ * and step() processes a bounded number of entries, so the caller can keep the
+ * UI responsive and abort at any time. The walk itself uses chdir + relative
+ * names (like the C version), because resolving an absolute path for every
+ * entry is noticeably slower on deep trees.
+ *
+ * Names are kept in one big string (Tree::names) and nodes only store an
+ * offset/length pair. This keeps the per-entry allocation count low, which is
+ * the dominant cost when scanning hundreds of thousands of files.
+ *
+ * Note: chdir() changes process-global state, so only one scan may be in
+ * progress at a time. The original working directory is restored when the scan
+ * finishes, aborts or fails.
  */
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::env;
 use std::fs;
 use std::io;
@@ -15,9 +28,23 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::platform;
 
+/// Initial node capacity: avoids repeated reallocation on large trees. The
+/// memory is only committed once nodes are actually pushed.
+const INITIAL_NODES: usize = 1 << 16;
+/// Initial capacity of the name arena.
+const INITIAL_NAMES: usize = 1 << 20;
+
+/// Reference to an entry name stored in the tree's name arena.
+#[derive(Debug, Clone, Copy)]
+pub struct NameRef {
+    start: u32,
+    len: u32,
+}
+
 #[derive(Debug)]
 pub struct Node {
-    pub name: String,
+    /// Name of this entry (an offset/length pair into `Tree::names`).
+    pub name: NameRef,
     /// Disk usage: st_blocks * 512, includes the directory's own blocks.
     pub size: u64,
     /// Apparent size: st_size.
@@ -32,9 +59,18 @@ pub struct Node {
 
 pub struct Tree {
     pub nodes: Vec<Node>,
+    /// All entry names, concatenated (name arena).
+    names: String,
 }
 
 impl Tree {
+    fn new() -> Tree {
+        Tree {
+            nodes: Vec::with_capacity(INITIAL_NODES),
+            names: String::with_capacity(INITIAL_NAMES),
+        }
+    }
+
     fn push(&mut self, node: Node) -> usize {
         self.nodes.push(node);
         self.nodes.len() - 1
@@ -45,146 +81,419 @@ impl Tree {
             self.nodes[p].children.push(child);
         }
     }
+
+    /// Adds a name to the arena and returns a reference to it.
+    fn intern(&mut self, name: &str) -> NameRef {
+        let start = self.names.len();
+        debug_assert!(start + name.len() <= u32::MAX as usize, "name arena overflow");
+        self.names.push_str(name);
+        NameRef {
+            start: start as u32,
+            len: name.len() as u32,
+        }
+    }
+
+    /// Name of a node.
+    pub fn name(&self, idx: usize) -> &str {
+        self.name_of(self.nodes[idx].name)
+    }
+
+    /// Name behind a reference (internal helper for the walk).
+    fn name_of(&self, r: NameRef) -> &str {
+        &self.names[r.start as usize..(r.start as usize + r.len as usize)]
+    }
+
+    /// Path of a node, built from the root. The root node's name is already an
+    /// absolute path; the platform's own separator is used for the rest.
+    pub fn path_of(&self, mut idx: usize) -> String {
+        let mut chain = Vec::new();
+        loop {
+            chain.push(idx);
+            match self.nodes[idx].parent {
+                Some(p) => idx = p,
+                None => break,
+            }
+        }
+        let mut path = PathBuf::new();
+        for &i in chain.iter().rev() {
+            path.push(self.name(i));
+        }
+        if path.as_os_str().is_empty() {
+            "/".to_string()
+        } else {
+            path.to_string_lossy().into_owned()
+        }
+    }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct ScanStats {
     pub entries: u64,
     pub errors: u64,
 }
 
-/// Scans `path` and returns the resulting tree plus a few stats.
-/// The root node (index 0) has the absolute path as its name.
-pub fn scan(path: &Path) -> io::Result<(Tree, ScanStats)> {
-    let md = fs::symlink_metadata(path)?;
-    if !md.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{}: not a directory", path.display()),
-        ));
-    }
-
-    let abs = if path.is_absolute() {
-        normalize(path)
-    } else {
-        normalize(&env::current_dir()?.join(path))
-    };
-
-    let mut tree = Tree { nodes: Vec::new() };
-    let mut stats = ScanStats::default();
-    let mut links = HashSet::new();
-    add_entry(
-        &mut tree,
-        path,
-        abs.to_string_lossy().into_owned(),
-        None,
-        &mut links,
-        &mut stats,
-    );
-    Ok((tree, stats))
+/// Snapshot of the scan progress, used by the UI.
+pub struct Progress {
+    pub root: String,
+    pub current: String,
+    pub entries: u64,
+    pub errors: u64,
+    /// Sum of the occupied sizes seen so far (a lower bound of the total).
+    pub bytes: u64,
 }
 
-/// Adds `path` (named `name`) as a child of `parent` and recurses into it when
-/// it is a directory. Returns the contribution of this entry to its parent:
-/// (disk usage, apparent size, number of entries).
-fn add_entry(
-    tree: &mut Tree,
-    path: &Path,
-    name: String,
-    parent: Option<usize>,
-    links: &mut HashSet<(u64, u64)>,
-    stats: &mut ScanStats,
-) -> (u64, u64, u64) {
-    let md = match fs::symlink_metadata(path) {
-        Ok(md) => md,
-        Err(_) => {
-            stats.errors += 1;
-            let idx = tree.push(Node {
-                name,
-                size: 0,
-                asize: 0,
-                items: 0,
-                parent,
-                children: Vec::new(),
-                is_dir: false,
-                error: true,
-            });
-            tree.attach(parent, idx);
-            return (0, 0, 1);
+struct Frame {
+    /// Index of the directory node in the tree.
+    node: usize,
+    /// Entries of this directory that still have to be processed.
+    names: VecDeque<NameRef>,
+    /// Accumulated contribution of the already processed children.
+    size: u64,
+    asize: u64,
+    items: u64,
+}
+
+enum Action {
+    Entry(NameRef),
+    CloseDir(usize),
+}
+
+pub struct Scanner {
+    tree: Tree,
+    stack: Vec<Frame>,
+    links: HashSet<(u64, u64)>,
+    stats: ScanStats,
+    /// Occupied bytes seen so far, for progress reporting only.
+    bytes: u64,
+    /// Working directory at the time the scanner was created.
+    start_cwd: PathBuf,
+    done: bool,
+    failed: Option<String>,
+}
+
+impl Scanner {
+    /// Prepares a scan of `path`. The current working directory is changed to
+    /// `path`; it is restored by `into_result()` or `abort()`.
+    pub fn new(path: &Path) -> io::Result<Scanner> {
+        let md = fs::symlink_metadata(path)?;
+        if !md.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{}: not a directory", path.display()),
+            ));
         }
-    };
 
-    // Symlinks are not followed: symlink_metadata() reports the link itself,
-    // so is_dir() is false for a symlink pointing to a directory.
-    let is_dir = md.is_dir();
+        let abs = if path.is_absolute() {
+            normalize(path)
+        } else {
+            normalize(&env::current_dir()?.join(path))
+        };
+        let start_cwd = env::current_dir()?;
 
-    // Count a file with multiple hard links only once. If the platform cannot
-    // provide a stable file identity, no de-duplication is attempted.
-    let dup = !is_dir
-        && platform::nlink(&md) > 1
-        && platform::file_id(&md).is_some_and(|id| !links.insert(id));
-    let (own_size, own_asize) = if dup {
-        (0, 0)
-    } else {
-        (platform::disk_usage(path, &md), md.len())
-    };
+        // From here on the walk uses relative names.
+        env::set_current_dir(&abs)
+            .map_err(|e| io::Error::new(e.kind(), format!("{}: {}", abs.display(), e)))?;
 
-    let idx = tree.push(Node {
-        name,
-        size: own_size,
-        asize: own_asize,
-        items: 0,
-        parent,
-        children: Vec::new(),
-        is_dir,
-        error: false,
-    });
-    tree.attach(parent, idx);
-    stats.entries += 1;
+        let mut scanner = Scanner {
+            tree: Tree::new(),
+            stack: Vec::new(),
+            links: HashSet::new(),
+            stats: ScanStats {
+                entries: 1,
+                errors: 0,
+            },
+            bytes: 0,
+            start_cwd,
+            done: false,
+            failed: None,
+        };
 
-    if !is_dir {
-        return (own_size, own_asize, 1);
+        let own_size = platform::disk_usage(&abs, &md);
+        let own_asize = md.len();
+        let root_name = scanner.tree.intern(&abs.to_string_lossy());
+        scanner.bytes = own_size;
+        scanner.tree.push(Node {
+            name: root_name,
+            size: own_size,
+            asize: own_asize,
+            items: 0,
+            parent: None,
+            children: Vec::new(),
+            is_dir: true,
+            error: false,
+        });
+
+        let (names, list_failed) = scanner.read_names();
+        let names = names.unwrap_or_default();
+        if list_failed {
+            scanner.tree.nodes[0].error = true;
+        }
+        scanner.tree.nodes[0].children.reserve(names.len());
+        scanner.stack.push(Frame {
+            node: 0,
+            names,
+            size: 0,
+            asize: 0,
+            items: 0,
+        });
+        Ok(scanner)
     }
 
-    let mut size = own_size;
-    let mut asize = own_asize;
-    let mut items = 0;
-
-    match fs::read_dir(path) {
-        Ok(rd) => {
-            for entry in rd {
-                match entry {
-                    Ok(entry) => {
-                        let (s, a, i) = add_entry(
-                            tree,
-                            &entry.path(),
-                            entry.file_name().to_string_lossy().into_owned(),
-                            Some(idx),
-                            links,
-                            stats,
-                        );
-                        size += s;
-                        asize += a;
-                        items += i;
-                    }
-                    Err(_) => {
-                        stats.errors += 1;
-                        tree.nodes[idx].error = true;
-                    }
+    /// Processes at most `budget` entries. Returns true when the scan is done
+    /// (also after a fatal error or abort).
+    pub fn step(&mut self, budget: usize) -> bool {
+        if self.done {
+            return true;
+        }
+        for _ in 0..budget {
+            let action = match self.stack.last_mut() {
+                None => {
+                    self.finish();
+                    return true;
                 }
+                Some(frame) => match frame.names.pop_front() {
+                    Some(name) => Action::Entry(name),
+                    None => Action::CloseDir(frame.node),
+                },
+            };
+            match action {
+                Action::Entry(name) => self.process(name),
+                Action::CloseDir(node) => self.close_dir(node),
+            }
+            if self.done {
+                return true;
             }
         }
-        Err(_) => {
-            stats.errors += 1;
-            tree.nodes[idx].error = true;
+        false
+    }
+
+    pub fn progress(&self) -> Progress {
+        let cur = self.stack.last().map(|f| f.node).unwrap_or(0);
+        Progress {
+            root: self.tree.name(0).to_string(),
+            current: self.tree.path_of(cur),
+            entries: self.stats.entries,
+            errors: self.stats.errors,
+            bytes: self.bytes,
         }
     }
 
-    tree.nodes[idx].size = size;
-    tree.nodes[idx].asize = asize;
-    tree.nodes[idx].items = items;
-    // +1 counts this directory itself
-    (size, asize, items + 1)
+    /// Fatal error that ended the scan early, if any.
+    pub fn failure(&self) -> Option<&str> {
+        self.failed.as_deref()
+    }
+
+    /// Stops the scan and restores the working directory. Safe to call twice.
+    pub fn abort(&mut self) {
+        self.stack.clear();
+        self.done = true;
+        self.restore_cwd();
+    }
+
+    /// Consumes the scanner, restoring the working directory.
+    pub fn into_result(self) -> (Tree, ScanStats) {
+        self.restore_cwd();
+        (self.tree, self.stats)
+    }
+
+    fn restore_cwd(&self) {
+        let _ = env::set_current_dir(&self.start_cwd);
+    }
+
+    fn finish(&mut self) {
+        self.done = true;
+        self.restore_cwd();
+    }
+
+    /// Handles one directory entry of the current directory.
+    fn process(&mut self, name_ref: NameRef) {
+        let parent = match self.stack.last() {
+            Some(f) => f.node,
+            None => return,
+        };
+
+        let md = {
+            let name = self.tree.name_of(name_ref);
+            fs::symlink_metadata(name)
+        };
+
+        let md = match md {
+            Ok(md) => md,
+            Err(_) => {
+                self.stats.errors += 1;
+                let idx = self.tree.push(Node {
+                    name: name_ref,
+                    size: 0,
+                    asize: 0,
+                    items: 0,
+                    parent: Some(parent),
+                    children: Vec::new(),
+                    is_dir: false,
+                    error: true,
+                });
+                self.tree.attach(Some(parent), idx);
+                self.stats.entries += 1;
+                self.add_to_parent(0, 0, 1);
+                return;
+            }
+        };
+
+        // Symlinks are not followed: symlink_metadata() reports the link
+        // itself, so a symlink to a directory is not entered.
+        let is_dir = md.is_dir();
+
+        // Count a file with multiple hard links only once. If the platform
+        // cannot provide a stable file identity, no de-duplication is attempted.
+        let dup = !is_dir
+            && platform::nlink(&md) > 1
+            && platform::file_id(&md).is_some_and(|id| !self.links.insert(id));
+        let (own_size, own_asize) = if dup {
+            (0, 0)
+        } else {
+            let name = self.tree.name_of(name_ref);
+            (platform::disk_usage(Path::new(name), &md), md.len())
+        };
+
+        let idx = self.tree.push(Node {
+            name: name_ref,
+            size: own_size,
+            asize: own_asize,
+            items: 0,
+            parent: Some(parent),
+            children: Vec::new(),
+            is_dir,
+            error: false,
+        });
+        self.tree.attach(Some(parent), idx);
+        self.stats.entries += 1;
+        self.bytes += own_size;
+
+        if !is_dir {
+            self.add_to_parent(own_size, own_asize, 1);
+            return;
+        }
+
+        // Directories are entered and processed by later step() calls.
+        let entered = {
+            let name = self.tree.name_of(name_ref);
+            env::set_current_dir(name).is_ok()
+        };
+        if !entered {
+            self.tree.nodes[idx].error = true;
+            self.stats.errors += 1;
+            self.add_to_parent(own_size, own_asize, 1);
+            return;
+        }
+
+        match self.read_names() {
+            (Some(names), list_failed) => {
+                if list_failed {
+                    self.tree.nodes[idx].error = true;
+                }
+                // The number of children is known: size the vector once.
+                self.tree.nodes[idx].children.reserve(names.len());
+                self.stack.push(Frame {
+                    node: idx,
+                    names,
+                    size: 0,
+                    asize: 0,
+                    items: 0,
+                });
+            }
+            (None, _) => {
+                // Could not list the directory: keep it as a leaf.
+                self.tree.nodes[idx].error = true;
+                let _ = env::set_current_dir("..");
+                self.add_to_parent(own_size, own_asize, 1);
+            }
+        }
+    }
+
+    /// Finalizes a directory: writes the accumulated totals into its node and
+    /// returns to the parent directory.
+    fn close_dir(&mut self, node: usize) {
+        let frame = match self.stack.pop() {
+            Some(f) => f,
+            None => return,
+        };
+        let is_root = self.stack.is_empty();
+
+        if !is_root && env::set_current_dir("..").is_err() {
+            // Not being able to go back is fatal, same as in the C version.
+            self.failed = Some(format!(
+                "error going back to the parent directory of {}",
+                self.tree.path_of(node)
+            ));
+            self.stack.clear();
+            self.finish();
+            return;
+        }
+
+        let (size, asize) = {
+            let n = &mut self.tree.nodes[node];
+            n.size += frame.size;
+            n.asize += frame.asize;
+            n.items = frame.items;
+            (n.size, n.asize)
+        };
+
+        if is_root {
+            self.finish();
+        } else {
+            self.add_to_parent(size, asize, frame.items + 1);
+        }
+    }
+
+    /// Adds the contribution of a finished child to the directory on top of
+    /// the stack.
+    fn add_to_parent(&mut self, size: u64, asize: u64, items: u64) {
+        if let Some(frame) = self.stack.last_mut() {
+            frame.size += size;
+            frame.asize += asize;
+            frame.items += items;
+        }
+    }
+
+    /// Reads the entry names of the current directory (".") and interns them.
+    /// Returns None when the directory could not be opened at all; `failed`
+    /// reports entries that could not be read (or the open failure itself).
+    fn read_names(&mut self) -> (Option<VecDeque<NameRef>>, bool) {
+        match fs::read_dir(".") {
+            Ok(rd) => {
+                let mut names = VecDeque::new();
+                let mut failed = false;
+                for entry in rd {
+                    match entry {
+                        Ok(entry) => {
+                            let file_name = entry.file_name();
+                            let name = file_name.to_string_lossy();
+                            names.push_back(self.tree.intern(&name));
+                        }
+                        Err(_) => {
+                            self.stats.errors += 1;
+                            failed = true;
+                        }
+                    }
+                }
+                (Some(names), failed)
+            }
+            Err(_) => {
+                self.stats.errors += 1;
+                (None, true)
+            }
+        }
+    }
+}
+
+/// Scans a whole tree in one go; used by the tests.
+#[cfg(test)]
+pub fn scan(path: &Path) -> io::Result<(Tree, ScanStats)> {
+    let mut scanner = Scanner::new(path)?;
+    while !scanner.step(4096) {}
+    if let Some(err) = scanner.failure() {
+        return Err(io::Error::other(err.to_string()));
+    }
+    Ok(scanner.into_result())
 }
 
 /// Removes "." components (and resolves ".." lexically) without touching the
@@ -211,6 +520,15 @@ fn normalize(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// The walk changes the process working directory, so tests that scan must
+    /// not run concurrently.
+    static SCAN_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        SCAN_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     struct TempDir(PathBuf);
 
@@ -242,12 +560,13 @@ mod tests {
             .children
             .iter()
             .copied()
-            .find(|&i| tree.nodes[i].name == name)
+            .find(|&i| tree.name(i) == name)
             .unwrap_or_else(|| panic!("child {} not found", name))
     }
 
     #[test]
     fn accumulates_child_sizes() {
+        let _guard = lock();
         let tmp = TempDir::new("acc");
         fs::create_dir(tmp.0.join("sub")).unwrap();
         fs::write(tmp.0.join("sub/f1"), vec![b'x'; 10_000]).unwrap();
@@ -271,12 +590,16 @@ mod tests {
         assert_eq!(sub.asize, own_asize(&tmp.0.join("sub")) + f1.asize);
         assert_eq!(sub.items, 1);
         assert_eq!(root.items, 3); // sub, f1, f2
-        assert_eq!(root.is_dir, true);
-        assert_eq!(f1.is_dir, false);
+        assert!(root.is_dir);
+        assert!(!f1.is_dir);
+        // Names live in the arena and path_of() rebuilds paths from it.
+        assert!(tree.path_of(f1_idx).contains("sub"));
+        assert!(tree.path_of(f1_idx).ends_with("f1"));
     }
 
     #[test]
     fn hard_links_counted_once() {
+        let _guard = lock();
         let tmp = TempDir::new("hlink");
         fs::create_dir(tmp.0.join("sub")).unwrap();
         fs::write(tmp.0.join("sub/f1"), vec![b'x'; 10_000]).unwrap();
@@ -292,5 +615,51 @@ mod tests {
         // f2 is a second link to f1's inode: listed, but counted as 0 bytes.
         assert_eq!(sub.size, own_size(&tmp.0.join("sub")) + f1_size);
         assert_eq!(sub.items, 2);
+    }
+
+    #[test]
+    fn stepped_scan_matches_bulk_scan() {
+        let _guard = lock();
+        let tmp = TempDir::new("stepped");
+        fs::create_dir_all(tmp.0.join("a/b")).unwrap();
+        fs::create_dir(tmp.0.join("c")).unwrap();
+        fs::write(tmp.0.join("a/b/f1"), vec![b'x'; 5_000]).unwrap();
+        fs::write(tmp.0.join("a/f2"), vec![b'y'; 7_000]).unwrap();
+        fs::write(tmp.0.join("c/f3"), vec![b'z'; 3_000]).unwrap();
+        fs::hard_link(tmp.0.join("a/f2"), tmp.0.join("c/f4")).unwrap();
+
+        let (bulk, bulk_stats) = scan(&tmp.0).unwrap();
+
+        // One entry per step: the result has to be identical, names included.
+        let mut scanner = Scanner::new(&tmp.0).unwrap();
+        while !scanner.step(1) {}
+        let (stepped, stepped_stats) = scanner.into_result();
+
+        assert_eq!(bulk_stats.entries, stepped_stats.entries);
+        assert_eq!(bulk.nodes.len(), stepped.nodes.len());
+        assert_eq!(bulk.nodes[0].size, stepped.nodes[0].size);
+        assert_eq!(bulk.nodes[0].asize, stepped.nodes[0].asize);
+        assert_eq!(bulk.nodes[0].items, stepped.nodes[0].items);
+        for i in 0..bulk.nodes.len() {
+            assert_eq!(bulk.name(i), stepped.name(i));
+        }
+    }
+
+    #[test]
+    fn abort_and_finish_restore_working_directory() {
+        let _guard = lock();
+        let tmp = TempDir::new("cwd");
+        fs::create_dir(tmp.0.join("sub")).unwrap();
+        fs::write(tmp.0.join("sub/f1"), vec![b'x'; 1_000]).unwrap();
+
+        let before = env::current_dir().unwrap();
+
+        let mut scanner = Scanner::new(&tmp.0).unwrap();
+        scanner.step(1);
+        scanner.abort();
+        assert_eq!(env::current_dir().unwrap(), before);
+
+        let _ = scan(&tmp.0).unwrap();
+        assert_eq!(env::current_dir().unwrap(), before);
     }
 }

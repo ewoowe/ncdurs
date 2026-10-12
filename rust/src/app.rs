@@ -4,8 +4,6 @@
  * currently opened directory, the sorted view of its children and the cursor.
  */
 
-use std::path::PathBuf;
-
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::ListState;
 
@@ -89,49 +87,49 @@ impl App {
     /// Absolute path of the currently opened directory, using the separator of
     /// the current platform.
     pub fn cur_path(&self) -> String {
-        let mut chain = Vec::new();
-        let mut idx = Some(self.cur);
-        while let Some(i) = idx {
-            chain.push(i);
-            idx = self.node(i).parent;
-        }
-        let mut path = PathBuf::new();
-        for &i in chain.iter().rev() {
-            path.push(&self.node(i).name);
-        }
-        if path.as_os_str().is_empty() {
-            "/".to_string()
-        } else {
-            path.to_string_lossy().into_owned()
-        }
+        self.tree.path_of(self.cur)
     }
 
     /// Re-sorts the children of the current directory.
     pub fn resort(&mut self) {
         let mut view = self.tree.nodes[self.cur].children.clone();
-        let nodes = &self.tree.nodes;
+        let tree = &self.tree;
         let col = self.sort_col;
         let desc = self.sort_desc;
         let show_as = self.show_as;
 
-        view.sort_by(|&a, &b| {
-            let (na, nb) = (&nodes[a], &nodes[b]);
-            let ord = match col {
-                SortCol::Size => {
-                    let (sa, sb) = if show_as {
-                        (na.asize, nb.asize)
-                    } else {
-                        (na.size, nb.size)
-                    };
-                    sa.cmp(&sb)
-                }
-                SortCol::Name => na.name.to_lowercase().cmp(&nb.name.to_lowercase()),
-                SortCol::Items => na.items.cmp(&nb.items),
-            };
-            // Fall back to the name for a stable, predictable order.
-            let ord = ord.then_with(|| na.name.cmp(&nb.name));
-            if desc { ord.reverse() } else { ord }
-        });
+        if col == SortCol::Name {
+            // Case-insensitive name sort: compute the key once per entry
+            // instead of allocating on every comparison.
+            let mut keyed: Vec<(String, usize)> = view
+                .iter()
+                .map(|&i| (tree.name(i).to_lowercase(), i))
+                .collect();
+            keyed.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| tree.name(a.1).cmp(tree.name(b.1))));
+            view = keyed.into_iter().map(|(_, i)| i).collect();
+            if desc {
+                view.reverse();
+            }
+        } else {
+            view.sort_by(|&a, &b| {
+                let (na, nb) = (&tree.nodes[a], &tree.nodes[b]);
+                let ord = match col {
+                    SortCol::Size => {
+                        let (sa, sb) = if show_as {
+                            (na.asize, nb.asize)
+                        } else {
+                            (na.size, nb.size)
+                        };
+                        sa.cmp(&sb)
+                    }
+                    SortCol::Items => na.items.cmp(&nb.items),
+                    SortCol::Name => unreachable!(),
+                };
+                // Fall back to the name for a stable, predictable order.
+                let ord = ord.then_with(|| tree.name(a).cmp(tree.name(b)));
+                if desc { ord.reverse() } else { ord }
+            });
+        }
 
         self.sorted = view;
         if self.selected >= self.sorted.len() {

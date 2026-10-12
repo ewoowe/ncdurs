@@ -1,7 +1,8 @@
-/* ncdurs - a minimal Rust reimplementation of ncdu
+/* ncdurs - a cross-platform ncdu reimplementation in Rust
  *
- * First version: scan a directory tree, then browse the result in a TUI.
- * See src/scan.rs (scanning), src/app.rs (state/keys) and src/ui.rs (drawing).
+ * Flow: parse arguments -> check the path -> enter the terminal -> scan with a
+ * progress screen (abortable with q) -> browse the result -> restore terminal.
+ * See src/scan.rs (walk), src/app.rs (browse state) and src/ui.rs (drawing).
  */
 
 mod app;
@@ -10,13 +11,14 @@ mod scan;
 mod ui;
 
 use std::env;
+use std::fs;
 use std::io::{self, Stdout};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{self, Event, KeyEventKind};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -24,11 +26,19 @@ use ratatui::crossterm::terminal::{
 use ratatui::Terminal;
 
 use app::App;
+use scan::Scanner;
 
 pub const NAME: &str = env!("CARGO_PKG_NAME");
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
+
+/// Entries processed between two checks for user input during the scan.
+const SCAN_BATCH: usize = 4096;
+/// Minimum time between two scan progress redraws.
+const SCAN_UI_INTERVAL: Duration = Duration::from_millis(200);
+/// Poll timeout of the browse loop.
+const BROWSE_POLL: Duration = Duration::from_millis(200);
 
 fn main() -> ExitCode {
     match run() {
@@ -68,31 +78,97 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let path = path.unwrap_or_else(|| PathBuf::from("."));
-    eprintln!("Scanning {} ...", path.display());
-    let (tree, stats) = scan::scan(&path)?;
-    if stats.errors > 0 {
-        eprintln!("Warning: {} entries could not be read", stats.errors);
+
+    // Validate before entering the terminal, so errors stay readable.
+    let md = fs::symlink_metadata(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    if !md.is_dir() {
+        return Err(format!("{}: not a directory", path.display()).into());
     }
 
-    let mut app = App::new(tree, show_as);
     let mut terminal = setup_terminal()?;
-    let result = event_loop(&mut terminal, &mut app);
+    let outcome = run_tui(&mut terminal, &path, show_as);
     restore_terminal(&mut terminal)?;
-    result
+
+    // Anything the user should see is printed after the terminal is restored.
+    if let Some(note) = outcome? {
+        eprintln!("{}", note);
+    }
+    Ok(())
 }
 
-fn event_loop(terminal: &mut Tui, app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
-    while !app.quit {
-        terminal.draw(|frame| ui::draw(frame, app))?;
-        if event::poll(Duration::from_millis(200))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    app.on_key(key);
+/// Scans with a progress screen, then browses the result. Returns a message to
+/// print once the terminal has been restored.
+fn run_tui(
+    terminal: &mut Tui,
+    path: &Path,
+    show_as: bool,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let mut scanner = Scanner::new(path)?;
+    let mut aborted = false;
+    let mut last_draw: Option<Instant> = None;
+
+    loop {
+        let done = scanner.step(SCAN_BATCH);
+        let redraw = done || last_draw.is_none_or(|t| t.elapsed() >= SCAN_UI_INTERVAL);
+
+        if redraw {
+            terminal.draw(|frame| ui::draw_scan(frame, &scanner))?;
+            last_draw = Some(Instant::now());
+            if let Some(key) = poll_key(Duration::ZERO)? {
+                if is_abort_key(&key) {
+                    aborted = true;
                 }
             }
         }
+
+        if aborted || done || scanner.failure().is_some() {
+            break;
+        }
     }
-    Ok(())
+
+    if aborted {
+        scanner.abort();
+        return Ok(Some("Scan aborted".to_string()));
+    }
+    if let Some(err) = scanner.failure() {
+        let msg = format!("scan failed: {err}");
+        scanner.abort();
+        return Err(msg.into());
+    }
+
+    let (tree, stats) = scanner.into_result();
+    let note = (stats.errors > 0)
+        .then(|| format!("Warning: {} entries could not be read", stats.errors));
+
+    let mut app = App::new(tree, show_as);
+    while !app.quit {
+        terminal.draw(|frame| ui::draw(frame, &mut app))?;
+        if let Some(key) = poll_key(BROWSE_POLL)? {
+            app.on_key(key);
+        }
+    }
+
+    Ok(note)
+}
+
+/// Waits up to `timeout` for a key press; returns None for other events.
+fn poll_key(timeout: Duration) -> io::Result<Option<KeyEvent>> {
+    if !event::poll(timeout)? {
+        return Ok(None);
+    }
+    match event::read()? {
+        Event::Key(key) if key.kind == KeyEventKind::Press => Ok(Some(key)),
+        _ => Ok(None),
+    }
+}
+
+/// Keys that abort the running scan.
+fn is_abort_key(key: &KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Char('q') | KeyCode::Esc => true,
+        KeyCode::Char('c') => key.modifiers.contains(KeyModifiers::CONTROL),
+        _ => false,
+    }
 }
 
 fn setup_terminal() -> io::Result<Tui> {
@@ -119,7 +195,7 @@ fn restore_terminal(terminal: &mut Tui) -> io::Result<()> {
 
 fn usage() -> String {
     format!(
-        "{name} {version} - minimal Rust reimplementation of ncdu
+        "{name} {version} - cross-platform ncdu reimplementation in Rust
 
 Usage: {name} [OPTIONS] [PATH]
 
@@ -127,6 +203,10 @@ Options:
   -a, --apparent-size   Show apparent size instead of disk usage
   -h, --help            Show this help and exit
   -V, --version         Print version
+
+Scanning:
+  While the tree is being built the current path, the number of entries and
+  the size seen so far are shown; press q (or Esc) to abort the scan.
 
 Keys:
   Up/k, Down/j       move the cursor

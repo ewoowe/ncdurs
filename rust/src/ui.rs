@@ -1,21 +1,27 @@
 /* ncdurs - drawing code (ratatui), comparable to src/browser.c
  *
- * Layout: status bar, path bar, item list, totals line.
+ * Two screens share the same four-row frame (status bar, path bar, content,
+ * summary line): the scan progress screen shown while the tree is built, and
+ * the browse screen.
  */
 
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
+use ratatui::text::Line;
 use ratatui::widgets::{List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
-use crate::scan::Node;
+use crate::scan::{Node, Progress, Scanner};
 use crate::{NAME, VERSION};
 
 const BAR_WIDTH: usize = 10;
 
-pub fn draw(f: &mut Frame, app: &mut App) {
-    let chunks = Layout::default()
+const KEYS_HINT: &str =
+    "↑/↓ move  →/Enter enter  ←/u back  s sort  d order  a size  q quit";
+
+fn frame_layout(f: &mut Frame) -> std::rc::Rc<[Rect]> {
+    Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
@@ -23,32 +29,18 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             Constraint::Min(1),
             Constraint::Length(1),
         ])
-        .split(f.area());
+        .split(f.area())
+}
 
-    draw_status(f, chunks[0]);
-    draw_path(f, app, chunks[1]);
+/* ---------------------------- browse screen ----------------------------- */
+
+pub fn draw(f: &mut Frame, app: &mut App) {
+    let chunks = frame_layout(f);
+    draw_status(f, chunks[0], KEYS_HINT);
+    draw_path(f, chunks[1], &app.cur_path());
     app.view_height = chunks[2].height as usize;
     draw_list(f, app, chunks[2]);
     draw_footer(f, app, chunks[3]);
-}
-
-fn draw_status(f: &mut Frame, area: Rect) {
-    let style = Style::default().add_modifier(Modifier::REVERSED);
-    let text = format!(
-        "{} {} ~ ↑/↓ move  →/Enter enter  ←/u back  s sort  d order  a size  q quit",
-        NAME, VERSION
-    );
-    f.render_widget(Paragraph::new(text).style(style), area);
-}
-
-fn draw_path(f: &mut Frame, app: &App, area: Rect) {
-    let style = Style::default().add_modifier(Modifier::REVERSED);
-    let mut line = format!("--- {} ", app.cur_path());
-    let width = area.width as usize;
-    while line.chars().count() < width {
-        line.push('-');
-    }
-    f.render_widget(Paragraph::new(line).style(style), area);
 }
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
@@ -59,7 +51,9 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         app.sorted
             .iter()
-            .map(|&idx| ListItem::new(row_text(app.node(idx), total, show_as)))
+            .map(|&idx| {
+                ListItem::new(row_text(app.node(idx), app.tree.name(idx), total, show_as))
+            })
             .collect()
     };
 
@@ -85,8 +79,58 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(text).alignment(Alignment::Right), area);
 }
 
+/* ----------------------------- scan screen ------------------------------ */
+
+pub fn draw_scan(f: &mut Frame, scanner: &Scanner) {
+    let chunks = frame_layout(f);
+    let progress = scanner.progress();
+
+    draw_status(f, chunks[0], &format!("{NAME} {VERSION} ~ Scanning... press q to abort"));
+    draw_path(f, chunks[1], &progress.root);
+    draw_progress(f, chunks[2], &progress);
+    draw_scan_footer(f, chunks[3], &progress);
+}
+
+fn draw_progress(f: &mut Frame, area: Rect, p: &Progress) {
+    let lines = vec![
+        Line::from(""),
+        Line::from(format!("   Total items: {}", p.entries)),
+        Line::from(format!("   size: {}", human_size(p.bytes))),
+        Line::from(""),
+        Line::from(format!("   Current item: {}", p.current)),
+    ];
+    f.render_widget(Paragraph::new(lines), area);
+}
+
+fn draw_scan_footer(f: &mut Frame, area: Rect, p: &Progress) {
+    let text = if p.errors > 0 {
+        format!("errors: {}   ", p.errors)
+    } else {
+        String::new()
+    };
+    f.render_widget(Paragraph::new(text).alignment(Alignment::Right), area);
+}
+
+/* ------------------------------- shared --------------------------------- */
+
+fn draw_status(f: &mut Frame, area: Rect, hint: &str) {
+    let style = Style::default().add_modifier(Modifier::REVERSED);
+    let text = format!("{NAME} {VERSION} ~ {hint}");
+    f.render_widget(Paragraph::new(text).style(style), area);
+}
+
+fn draw_path(f: &mut Frame, area: Rect, path: &str) {
+    let style = Style::default().add_modifier(Modifier::REVERSED);
+    let mut line = format!("--- {path} ");
+    let width = area.width as usize;
+    while line.chars().count() < width {
+        line.push('-');
+    }
+    f.render_widget(Paragraph::new(line).style(style), area);
+}
+
 /// One list line: size, graph, percentage and name ("/" marks a directory).
-fn row_text(n: &Node, total: u64, show_as: bool) -> String {
+fn row_text(n: &Node, name: &str, total: u64, show_as: bool) -> String {
     let size = if show_as { n.asize } else { n.size };
     let pct = if total > 0 {
         size as f64 * 100.0 / total as f64
@@ -94,9 +138,9 @@ fn row_text(n: &Node, total: u64, show_as: bool) -> String {
         0.0
     };
     let name = if n.error {
-        format!("{} [error]", n.name)
+        format!("{name} [error]")
     } else {
-        n.name.clone()
+        name.to_string()
     };
     format!(
         "{:>9} [{}] {:>4}% {}{}",

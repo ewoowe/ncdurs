@@ -841,6 +841,12 @@ mod tests {
         assert!(tree.path_of(f1_idx).ends_with("f1"));
     }
 
+    /// Hard links are counted once - but only where the file identity and the
+    /// link count are available. On Windows both are stubbed out in
+    /// platform.rs (std does not expose the file index yet), so the
+    /// de-duplication cannot happen there and the totals would differ; that
+    /// platform limitation is documented in the README.
+    #[cfg(unix)]
     #[test]
     fn hard_links_counted_once() {
         let _guard = lock();

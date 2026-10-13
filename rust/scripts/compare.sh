@@ -212,6 +212,79 @@ chmod 000 "$CASE/secret"                  # 无权限目录：应报错但继续
 ls -l "$CASE" | sed 's/^/  /'
 compare_dir "边界用例" "$CASE"
 
+# ------------------------------------------------- 跨目录硬链接（已知差异）
+
+section "跨目录硬链接（同一 inode 落在两个目录）"
+
+# a/f1 and b/f2 share one inode: the totals must agree, while the per-directory
+# split is known to differ - see "硬链接记账方式的差异" in README.
+HLCASE="$TMP/hlcase"
+mkdir -p "$HLCASE/a" "$HLCASE/b"
+dd if=/dev/zero of="$HLCASE/a/f1" bs=1M count=1 status=none
+ln "$HLCASE/a/f1" "$HLCASE/b/f2"
+
+compare_dir "跨目录硬链接" "$HLCASE"
+
+# Shows the (known) difference instead of asserting on it: in the export, the C
+# version keeps the full size on *every* link (plus hlnkc/ino), while our file
+# only carries the size of the link that was actually counted.
+hl_items() {  # hl_items <bin> -> the f1/f2 entries as they appear in the export
+  "$1" -o - "$HLCASE" 2>/dev/null | grep -aoE '\{"name":"f[12]"[^}]*\}'
+}
+
+echo "  导出文件里同一 inode 的两个条目："
+echo "  C 版（每条链接都带自身大小 + hlnkc/ino）："
+hl_items "$C_BIN" | sed 's/^/    /'
+echo "  ncdurs（只保留被计入那条的大小）："
+hl_items "$RUST_BIN" | sed 's/^/    /'
+echo "  以上差异为已知项、不计入 PASS/FAIL：根总量与条目数一致，只是记账方式不同。"
+
+# ---------------------------------------------------------- 导出/导入互通
+
+section "导出 / 导入互通（与 C 版）"
+
+# Numbers that are guaranteed to survive a round trip: the root entry's sizes
+# and the total number of items. Per-item sizes of hard links are not compared:
+# the C version exports the size of every link and de-duplicates while loading,
+# while we store the already de-duplicated values (the totals agree).
+export_summary() {
+  local root items
+  root="$(grep -aoE '"(asize|dsize)":[0-9]+' "$1" | head -2 | tr '\n' ' ')"
+  items="$(grep -ao '"name"' "$1" | wc -l)"
+  printf '%s items=%s' "$root" "$items"
+}
+
+interop_dir() {  # interop_dir <label> <dir>
+  local label="$1" dir="$2"
+  local cjson="$TMP/c-export.json" rjson="$TMP/r-export.json"
+  local again="$TMP/r-again.json" c2json="$TMP/c2-export.json"
+
+  # 1) C export -> ncdurs import -> export again: numbers must be identical.
+  if ! "$C_BIN" -o - "$dir" >"$cjson" 2>/dev/null; then
+    echo "  跳过：C 版导出失败（$dir）"
+    return
+  fi
+  if "$RUST_BIN" -f "$cjson" -o "$again" 2>"$TMP/interop.err"; then
+    check "$label: ncdurs 读 C 版导出后数值不变" \
+      "$(export_summary "$cjson")" "$(export_summary "$again")"
+  else
+    check "$label: ncdurs 导入 C 版导出" "成功" "失败：$(head -1 "$TMP/interop.err")"
+  fi
+
+  # 2) ncdurs export -> C import -> C export: numbers must match C's own scan.
+  if "$RUST_BIN" -o "$rjson" "$dir" >/dev/null 2>&1; then
+    if "$C_BIN" -0 -f "$rjson" -o "$c2json" 2>"$TMP/interop2.err"; then
+      check "$label: C 版读 ncdurs 导出后数值不变" \
+        "$(export_summary "$cjson")" "$(export_summary "$c2json")"
+    else
+      check "$label: C 版导入 ncdurs 导出" "成功" "失败：$(head -1 "$TMP/interop2.err")"
+    fi
+  fi
+}
+
+interop_dir "目标目录" "$DIR"
+interop_dir "边界用例" "$CASE"
+
 # ---------------------------------------------------------------- 性能对比
 
 if [ "$SKIP_PERF" = 1 ]; then

@@ -200,10 +200,15 @@ mod tests {
     #[test]
     fn classic_codes_for_the_theme_colours() {
         // UIC_HD: BLACK,CYAN,0
-        assert_eq!(sgr(Style::default().fg(Color::Black).bg(Color::Cyan)), "\x1b[0m\x1b[30m\x1b[46m");
+        assert_eq!(
+            sgr(Style::default().fg(Color::Black).bg(Color::Cyan)),
+            "\x1b[0m\x1b[30m\x1b[46m"
+        );
         // UIC_NUM: YELLOW,-,B
         assert_eq!(
-            sgr(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            sgr(Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)),
             "\x1b[0m\x1b[33m\x1b[1m"
         );
         // UIC_SEL: WHITE,GREEN,B (COLOR_WHITE is ANSI 7 -> Color::Gray here)
@@ -218,13 +223,18 @@ mod tests {
         assert_eq!(sgr(Style::default().fg(Color::Magenta)), "\x1b[0m\x1b[35m");
         // UIC_DIR: BLUE,-,B
         assert_eq!(
-            sgr(Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+            sgr(Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD)),
             "\x1b[0m\x1b[34m\x1b[1m"
         );
         // UIC_FLAG: RED,-,0
         assert_eq!(sgr(Style::default().fg(Color::Red)), "\x1b[0m\x1b[31m");
         // The off theme only uses attributes.
-        assert_eq!(sgr(Style::default().add_modifier(Modifier::REVERSED)), "\x1b[0m\x1b[7m");
+        assert_eq!(
+            sgr(Style::default().add_modifier(Modifier::REVERSED)),
+            "\x1b[0m\x1b[7m"
+        );
         assert_eq!(sgr(Style::default()), "\x1b[0m");
     }
 

@@ -123,7 +123,10 @@ impl Tree {
     /// Adds a name to the arena and returns a reference to it.
     fn intern(&mut self, name: &str) -> NameRef {
         let start = self.names.len();
-        debug_assert!(start + name.len() <= u32::MAX as usize, "name arena overflow");
+        debug_assert!(
+            start + name.len() <= u32::MAX as usize,
+            "name arena overflow"
+        );
         self.names.push_str(name);
         NameRef {
             start: start as u32,
@@ -165,10 +168,10 @@ impl Tree {
 
     /// Detaches a node from its parent's child list.
     fn detach(&mut self, idx: usize) {
-        if let Some(parent) = self.nodes[idx].parent {
-            if let Some(pos) = self.nodes[parent].children.iter().position(|&c| c == idx) {
-                self.nodes[parent].children.remove(pos);
-            }
+        if let Some(parent) = self.nodes[idx].parent
+            && let Some(pos) = self.nodes[parent].children.iter().position(|&c| c == idx)
+        {
+            self.nodes[parent].children.remove(pos);
         }
     }
 
@@ -963,7 +966,11 @@ mod tests {
         );
         assert_eq!(tree.nodes[0].items, root_items);
         assert_eq!(
-            tree.nodes[0].children.iter().filter(|&&c| c == d_idx).count(),
+            tree.nodes[0]
+                .children
+                .iter()
+                .filter(|&&c| c == d_idx)
+                .count(),
             1
         );
     }
@@ -976,8 +983,7 @@ mod tests {
         fs::write(tmp.0.join("a/f1"), vec![b'x'; 4_000]).unwrap();
 
         let (tree, _) = scan(&tmp.0).unwrap();
-        let mut app =
-            crate::app::App::new(tree, false, false, crate::theme::Theme::default());
+        let mut app = crate::app::App::new(tree, false, false, crate::theme::Theme::default());
         app.cur = find_child(&app.tree, 0, "a");
         let dir_before = app.tree.nodes[app.cur].size;
         let root_before = app.tree.nodes[0].size;

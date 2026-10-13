@@ -40,7 +40,6 @@ pub enum SortCol {
     Mtime,
 }
 
-
 /// A blocking action requested by the user; the main loop runs it.
 pub enum Job {
     Delete(usize),
@@ -259,7 +258,9 @@ impl App {
     }
 
     fn leave(&mut self) {
-        let Some(parent) = self.cur_node().parent else { return };
+        let Some(parent) = self.cur_node().parent else {
+            return;
+        };
         let leaving = self.cur;
         self.cur = parent;
         self.resort();
@@ -297,10 +298,10 @@ impl App {
             self.sort_desc = col != SortCol::Name;
         }
         self.resort();
-        if let Some(keep) = keep {
-            if let Some(pos) = self.sorted.iter().position(|&i| i == keep) {
-                self.selected = pos + usize::from(self.has_parent_row());
-            }
+        if let Some(keep) = keep
+            && let Some(pos) = self.sorted.iter().position(|&i| i == keep)
+        {
+            self.selected = pos + usize::from(self.has_parent_row());
         }
     }
 
@@ -464,9 +465,7 @@ impl App {
             KeyCode::PageUp => self.move_by(-(self.view_height.max(1) as i64)),
             KeyCode::PageDown => self.move_by(self.view_height.max(1) as i64),
             KeyCode::Home => self.selected = 0,
-            KeyCode::End | KeyCode::Char('G') => {
-                self.selected = self.row_count().saturating_sub(1)
-            }
+            KeyCode::End | KeyCode::Char('G') => self.selected = self.row_count().saturating_sub(1),
             KeyCode::Right | KeyCode::Enter | KeyCode::Char('l') => self.enter(),
             KeyCode::Left | KeyCode::Backspace | KeyCode::Char('u') => self.leave(),
             KeyCode::Char('n') => self.set_sort(SortCol::Name),

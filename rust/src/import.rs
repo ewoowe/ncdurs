@@ -520,7 +520,11 @@ mod tests {
         assert_eq!(tree.nodes[0].items, 3);
         assert_eq!(tree.nodes[0].children.len(), 2);
 
-        let names: Vec<&str> = tree.nodes[0].children.iter().map(|&c| tree.name(c)).collect();
+        let names: Vec<&str> = tree.nodes[0]
+            .children
+            .iter()
+            .map(|&c| tree.name(c))
+            .collect();
         assert_eq!(names, vec!["sub", "f2"]);
 
         let sub = tree.nodes[0].children[0];
@@ -546,7 +550,7 @@ mod tests {
 {"name":"x","asize":7}]]
 "#;
         let tree = read(json.as_bytes()).unwrap();
-        assert_eq!(tree.nodes[0].size, 10 + 0);
+        assert_eq!(tree.nodes[0].size, 10);
         assert_eq!(tree.nodes[0].children.len(), 1);
         assert_eq!(tree.nodes[1].asize, 7);
         // `notreg`, `excluded` and the `-e` fields are understood; `excluded`

@@ -79,7 +79,9 @@ impl Theme {
             },
             Theme::Dark => Colors {
                 default: plain(),
-                box_title: Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
+                box_title: Style::default()
+                    .fg(Color::Blue)
+                    .add_modifier(Modifier::BOLD),
                 hd: Style::default().fg(Color::Black).bg(Color::Cyan),
                 sel: Style::default()
                     .fg(Color::Gray)
@@ -103,7 +105,9 @@ impl Theme {
                     .fg(Color::Yellow)
                     .bg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
-                dir: Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
+                dir: Style::default()
+                    .fg(Color::Blue)
+                    .add_modifier(Modifier::BOLD),
                 dir_sel: Style::default()
                     .fg(Color::Blue)
                     .bg(Color::Green)
@@ -273,7 +277,12 @@ mod tests {
 
         let dark = Theme::Dark.colors();
         assert_eq!(dark.hd, Style::default().fg(Color::Black).bg(Color::Cyan));
-        assert_eq!(dark.dir, Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD));
+        assert_eq!(
+            dark.dir,
+            Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD)
+        );
         assert_eq!(dark.flag, Style::default().fg(Color::Red));
         // COLOR_WHITE is ANSI 7, which ratatui calls Gray (White would be 15).
         assert_eq!(dark.sel.fg, Some(Color::Gray));

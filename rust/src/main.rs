@@ -23,13 +23,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
+use ratatui::Terminal;
 use ratatui::crossterm::cursor::Show;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::Terminal;
 
 use app::{App, DisplayOptions};
 use scan::{ScanOptions, Scanner, Tree};
@@ -185,7 +185,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         extended,
     };
 
-
     // Validate before entering the terminal, so errors stay readable.
     let md = fs::symlink_metadata(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
     if !md.is_dir() {
@@ -194,23 +193,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Exporting does not need a terminal: when stdout is redirected (a pipe or
     // a file) scan without the progress screen, so it works from scripts.
-    if let Some(file) = export.as_deref() {
-        if !io::stdout().is_terminal() {
-            let (tree, warning) = scan_plain(&path, &options)?;
-            let entries = tree.nodes.len();
-            if file == Path::new("-") {
-                let mut out = io::stdout().lock();
-                export::write(&tree, &mut out).map_err(|e| format!("stdout: {e}"))?;
-                out.flush()?;
-            } else {
-                write_export(&tree, file)?;
-                eprintln!("exported {entries} entries to {}", file.display());
-            }
-            if let Some(warning) = warning {
-                eprintln!("{warning}");
-            }
-            return Ok(());
+    if let Some(file) = export.as_deref()
+        && !io::stdout().is_terminal()
+    {
+        let (tree, warning) = scan_plain(&path, &options)?;
+        let entries = tree.nodes.len();
+        if file == Path::new("-") {
+            let mut out = io::stdout().lock();
+            export::write(&tree, &mut out).map_err(|e| format!("stdout: {e}"))?;
+            out.flush()?;
+        } else {
+            write_export(&tree, file)?;
+            eprintln!("exported {entries} entries to {}", file.display());
         }
+        if let Some(warning) = warning {
+            eprintln!("{warning}");
+        }
+        return Ok(());
     }
 
     let mut terminal = setup_terminal()?;
@@ -250,8 +249,8 @@ fn scan_plain(
         return Err(format!("scan failed: {err}").into());
     }
     let (tree, stats) = scanner.into_result();
-    let warning = (stats.errors > 0)
-        .then(|| format!("Warning: {} entries could not be read", stats.errors));
+    let warning =
+        (stats.errors > 0).then(|| format!("Warning: {} entries could not be read", stats.errors));
     Ok((tree, warning))
 }
 
@@ -323,10 +322,10 @@ fn run_tui(
         if redraw {
             terminal.draw(|frame| ui::draw_scan(frame, &scanner, &theme.colors()))?;
             last_draw = Some(Instant::now());
-            if let Some(key) = poll_key(Duration::ZERO)? {
-                if is_abort_key(&key) {
-                    aborted = true;
-                }
+            if let Some(key) = poll_key(Duration::ZERO)?
+                && is_abort_key(&key)
+            {
+                aborted = true;
             }
         }
 
@@ -349,8 +348,8 @@ fn run_tui(
     }
 
     let (tree, stats) = scanner.into_result();
-    let warning = (stats.errors > 0)
-        .then(|| format!("Warning: {} entries could not be read", stats.errors));
+    let warning =
+        (stats.errors > 0).then(|| format!("Warning: {} entries could not be read", stats.errors));
 
     if let Some(file) = export {
         let entries = tree.nodes.len();

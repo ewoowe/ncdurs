@@ -1,0 +1,102 @@
+# CI for the Rust implementation (rust/). The C version has its own build.
+#
+# Three jobs:
+#   test     - fmt + clippy (warnings are errors) + tests + release build,
+#              on Linux, macOS and Windows.
+#   interop  - builds the C version as well and runs scripts/compare.sh, which
+#              checks the numbers, the boundary cases and the export/import
+#              round trips against ncdu itself.
+#   msrv     - makes sure the declared minimum Rust version still compiles.
+#
+# The same file works with Gitea/Forgejo Actions, which read .github/workflows
+# as well.
+
+name: rust
+
+on:
+  push:
+    paths:
+      - "rust/**"
+      - ".github/workflows/rust.yml"
+  pull_request:
+    paths:
+      - "rust/**"
+      - ".github/workflows/rust.yml"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: cargo fmt
+        run: cargo fmt --all --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test
+        run: cargo test
+      - name: cargo build --release
+        run: cargo build --release
+
+  interop:
+    name: compare with the C version
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: install ncurses headers
+        run: sudo apt-get update && sudo apt-get install -y libncurses-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: build a small tree to compare
+        run: |
+          rm -rf /tmp/ci-tree
+          mkdir -p /tmp/ci-tree/sub
+          dd if=/dev/zero of=/tmp/ci-tree/sub/f1 bs=1M count=2 status=none
+          echo hi > /tmp/ci-tree/small.txt
+          ln -s /tmp /tmp/ci-tree/link
+      # The script configures and builds the C version itself, then checks
+      # du/C/ncdurs numbers, the generated boundary cases and both directions
+      # of the export/import round trip. Performance is skipped: the runner is
+      # too noisy for meaningful timings.
+      - name: compare.sh
+        run: bash scripts/compare.sh /tmp/ci-tree --skip-perf
+
+  msrv:
+    name: minimum supported Rust version
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      # let-chains (edition 2024) need 1.88.
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: cargo build
+        run: cargo build
+      - name: cargo test
+        run: cargo test

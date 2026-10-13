@@ -17,11 +17,11 @@
  * and everything else on a row is UIC_DEFAULT / UIC_SEL.
  */
 
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph};
-use ratatui::Frame;
 
 use crate::app::App;
 use crate::scan::{Node, Scanner};
@@ -232,13 +232,7 @@ fn draw_delete_confirm(f: &mut Frame, app: &App, colors: &Colors) {
         } else {
             colors.default
         };
-        win_line(
-            f,
-            inner,
-            4,
-            col,
-            Line::from(Span::styled(text, style)),
-        );
+        win_line(f, inner, 4, col, Line::from(Span::styled(text, style)));
     }
 }
 
@@ -352,6 +346,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect, cols: usize) {
 
 /// The ".." row (the C version's `dirlist_parent`): browse_draw_item() skips
 /// both the size and the graph for it, leaving just the name.
+#[allow(clippy::too_many_arguments)]
 fn parent_row_line(
     selected: bool,
     cols: usize,
@@ -449,10 +444,10 @@ fn row_line(
     let size = if show_as { n.asize } else { n.size };
     // flag(2) + size(10) + graph + [items(7)] + [mtime(27)] + prefix(1)
     let graph_cols = match graph {
-        0 => 0,              // nothing at all
-        1 => width + 3,      // "[" bar "]" and a space
-        2 => 9,              // "[" %5.1f "%" "]" and a space
-        _ => width + 10,     // "[" %5.1f "%" " " bar "]" and a space
+        0 => 0,          // nothing at all
+        1 => width + 3,  // "[" bar "]" and a space
+        2 => 9,          // "[" %5.1f "%" "]" and a space
+        _ => width + 10, // "[" %5.1f "%" " " bar "]" and a space
     };
     let items_cols = if show_items { 7 } else { 0 };
     let mtime_cols = if show_mtime { 27 } else { 0 };
@@ -500,7 +495,11 @@ fn row_line(
         spans.push(Span::styled(" ", base));
     }
     spans.push(Span::styled(
-        format!("{}{}", if n.is_dir { "/" } else { " " }, cropstr(name, room)),
+        format!(
+            "{}{}",
+            if n.is_dir { "/" } else { " " },
+            cropstr(name, room)
+        ),
         name_style,
     ));
 
@@ -531,10 +530,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     }
 
     if app.sorted.is_empty() {
-        f.render_widget(
-            Paragraph::new(" No items to display.").style(c.hd),
-            area,
-        );
+        f.render_widget(Paragraph::new(" No items to display.").style(c.hd), area);
         return;
     }
 
@@ -682,9 +678,7 @@ pub fn draw_scan(f: &mut Frame, scanner: &Scanner, colors: &Colors) {
         ani[..=pos].copy_from_slice(&text[..=pos]);
     } else {
         let back = pos - text.len();
-        for i in back..text.len() {
-            ani[i] = text[i];
-        }
+        ani[back..].copy_from_slice(&text[back..]);
     }
     win_line(
         f,
@@ -700,7 +694,7 @@ pub fn draw_scan(f: &mut Frame, scanner: &Scanner, colors: &Colors) {
         f,
         inner,
         8,
-        (width as u16).saturating_sub(18),
+        width.saturating_sub(18),
         Line::from(vec![
             Span::styled("Press ", colors.default),
             Span::styled("q", colors.key),
@@ -724,10 +718,7 @@ pub fn draw_message(f: &mut Frame, text: &str, colors: &Colors) {
         inner,
         4,
         33,
-        Line::from(Span::styled(
-            "Press any key to continue",
-            colors.default,
-        )),
+        Line::from(Span::styled("Press any key to continue", colors.default)),
     );
 }
 
@@ -741,7 +732,7 @@ fn fullsize(n: u64) -> String {
     let sep = crate::platform::thousands_sep();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, c) in s.char_indices() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push(sep);
         }
         out.push(c);
@@ -769,13 +760,7 @@ pub fn draw_info(f: &mut Frame, app: &App, colors: &Colors) {
         9,
         Line::from(Span::styled(cropstr(name, 49), colors.default)),
     );
-    win_line(
-        f,
-        inner,
-        2,
-        3,
-        Line::from(Span::styled("Name:", bold)),
-    );
+    win_line(f, inner, 2, 3, Line::from(Span::styled("Name:", bold)));
 
     let path = app.tree.path_of(app.cur);
     win_line(
@@ -785,13 +770,7 @@ pub fn draw_info(f: &mut Frame, app: &App, colors: &Colors) {
         9,
         Line::from(Span::styled(cropstr(&path, 49), colors.default)),
     );
-    win_line(
-        f,
-        inner,
-        3,
-        3,
-        Line::from(Span::styled("Path:", bold)),
-    );
+    win_line(f, inner, 3, 3, Line::from(Span::styled("Path:", bold)));
 
     if node.has_ext {
         // browse_draw_info() (browser.c:57-85): in extended mode the type line
@@ -811,20 +790,14 @@ pub fn draw_info(f: &mut Frame, app: &App, colors: &Colors) {
             inner,
             4,
             26,
-            Line::from(Span::styled(
-                node.ext.uid.to_string(),
-                colors.default,
-            )),
+            Line::from(Span::styled(node.ext.uid.to_string(), colors.default)),
         );
         win_line(
             f,
             inner,
             4,
             38,
-            Line::from(Span::styled(
-                node.ext.gid.to_string(),
-                colors.default,
-            )),
+            Line::from(Span::styled(node.ext.gid.to_string(), colors.default)),
         );
         win_line(
             f,
@@ -861,13 +834,7 @@ pub fn draw_info(f: &mut Frame, app: &App, colors: &Colors) {
             9,
             Line::from(Span::styled(kind, colors.default)),
         );
-        win_line(
-            f,
-            inner,
-            4,
-            3,
-            Line::from(Span::styled("Type:", bold)),
-        );
+        win_line(f, inner, 4, 3, Line::from(Span::styled("Type:", bold)));
     }
 
     for (row, bytes, label) in [
@@ -940,11 +907,7 @@ pub const HELP_FLAGS_LEN: usize = HELP_FLAGS.len();
 /// How many entries fit on a help page (src/help.c:88 uses 10 for the keys
 /// page and 7 for the flags page).
 fn help_visible(page: usize) -> usize {
-    if page == 1 {
-        10
-    } else {
-        7
-    }
+    if page == 1 { 10 } else { 7 }
 }
 
 /// The help window (src/help.c:78-161): 15x60 with three tabs, the list of the
@@ -1096,8 +1059,8 @@ mod tests {
     use crate::app::App;
     use crate::scan::Tree;
     use crate::theme::Theme;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     /// A root with two files: the directory total is larger than any single
     /// entry, which is what distinguishes the graph scale.

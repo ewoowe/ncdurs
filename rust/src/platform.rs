@@ -129,7 +129,7 @@ pub use imp::{disk_usage, ext_info, file_id, nlink};
 #[cfg(unix)]
 pub fn init_locale() {
     unsafe {
-        libc::setlocale(libc::LC_ALL, b"\0".as_ptr().cast());
+        libc::setlocale(libc::LC_ALL, c"".as_ptr());
     }
 }
 
@@ -147,11 +147,7 @@ pub fn thousands_sep() -> char {
             return '.';
         }
         let byte = *(*lc).thousands_sep as u8;
-        if byte == 0 {
-            '.'
-        } else {
-            byte as char
-        }
+        if byte == 0 { '.' } else { byte as char }
     }
 }
 
@@ -174,12 +170,7 @@ pub fn format_mtime(mtime: i64) -> String {
         }
         let mut buf = [0 as libc::c_char; 64];
         let fmt = b"%Y-%m-%d %H:%M:%S %z\0";
-        let n = libc::strftime(
-            buf.as_mut_ptr(),
-            buf.len(),
-            fmt.as_ptr().cast(),
-            &tm,
-        );
+        let n = libc::strftime(buf.as_mut_ptr(), buf.len(), fmt.as_ptr().cast(), &tm);
         if n == 0 {
             return String::new();
         }

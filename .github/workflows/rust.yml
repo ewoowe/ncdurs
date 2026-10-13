@@ -63,11 +63,16 @@ jobs:
         working-directory: rust
     steps:
       - uses: actions/checkout@v4
-      - name: install ncurses headers
-        run: sudo apt-get update && sudo apt-get install -y libncurses-dev
-      # configure explicitly, with visible output: if this fails (missing
-      # headers, say) the reason should be readable in the log. The script then
-      # sees a Makefile and only has to run make.
+      - name: install build tools and ncurses headers
+        run: sudo apt-get update && sudo apt-get install -y libncurses-dev autoconf automake
+      # A fresh checkout only carries configure.ac and Makefile.am (configure,
+      # Makefile.in and aclocal.m4 are gitignored), so autotools have to build
+      # the build system first. Both steps run with visible output on purpose:
+      # when something is missing, the reason should be readable in the log.
+      # The script then sees a Makefile and only has to run make.
+      - name: bootstrap the C version (autoreconf)
+        working-directory: .
+        run: autoreconf -i
       - name: configure the C version
         working-directory: .
         run: ./configure

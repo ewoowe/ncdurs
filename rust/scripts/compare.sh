@@ -88,6 +88,14 @@ if [ "$DO_BUILD" = 1 ]; then
   # hard: carrying on without a C binary only defers the error to the check
   # below, where the reason is much less obvious.
   if [ ! -f "$ROOT/Makefile" ]; then
+    # A fresh checkout carries only configure.ac and Makefile.am - configure and
+    # Makefile.in are generated (and gitignored), so autotools have to create
+    # the build system first.
+    if [ ! -x "$ROOT/configure" ]; then
+      echo "  生成 configure (autoreconf -i) ..."
+      ( cd "$ROOT" && autoreconf -i >/dev/null 2>&1 ) \
+        || { echo "  error: autoreconf 失败（需要 autoconf 与 automake）" >&2; exit 1; }
+    fi
     echo "  配置 C 版 (configure) ..."
     ( cd "$ROOT" && ./configure >/dev/null 2>&1 ) \
       || { echo "  error: ./configure 失败（需要 ncurses 开发包）" >&2; exit 1; }

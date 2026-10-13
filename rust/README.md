@@ -35,6 +35,10 @@ ncdurs [OPTIONS] [PATH]
 -o, --export FILE     扫描并把结果以 JSON 写入 FILE（- 表示标准输出）
 -f, --import FILE     读取用 -o 生成的文件并浏览（- 表示标准输入）
     --color SCHEME    颜色主题：auto（默认）/ off / dark / dark-bg
+    --exclude PATTERN 匹配的条目不计入统计（可重复指定）
+-X, --exclude-from FILE 从文件读取排除模式，每行一个
+-x, --one-file-system 不跨文件系统
+    --exclude-caches  跳过含 CACHEDIR.TAG 的目录
 -h, --help            显示帮助
 -V, --version         显示版本
 ```
@@ -76,7 +80,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 
 ## 与原版 ncdu（C 版 1.22）的对比
 
-下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 20 项、部分实现 4 项、未实现 35 项。
+下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 24 项、部分实现 4 项、未实现 31 项。
 
 ### 数值一致性
 
@@ -126,9 +130,9 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `-o FILE`（导出为 JSON） | 已实现 | 与 C 版 JSON 互通；`-` 表示 stdout，重定向时不启界面 |
 | `-e, --extended, --no-extended` | 未实现 | 当前不保存 uid/gid/mtime |
 | `--ignore-config` | 未实现 | 尚无配置文件 |
-| `-x, --one-file-system` / `--cross-file-system` | 未实现 | |
-| `--exclude PATTERN` / `-X, --exclude-from FILE` | 未实现 | |
-| `--exclude-caches` / `--include-caches` | 未实现 | |
+| `-x, --one-file-system` / `--cross-file-system` | 已实现 | 目录标 `>`，不深入且不计入 |
+| `--exclude PATTERN` / `-X, --exclude-from FILE` | 已实现 | 匹配整条路径与它的每个后缀（`fnmatch` 语义，`*` 跨 `/`）；命中的目录标 `<` 且不深入 |
+| `--exclude-caches` / `--include-caches` | 已实现 | 识别 `CACHEDIR.TAG` 的官方签名 |
 | `-L, --follow-symlinks` / `--no-follow-symlinks` | 未实现 | 行为等同原版默认（不跟随） |
 | `--exclude-kernfs` / `--include-kernfs` | 未实现 | |
 | `--exclude-firmlinks` / `--follow-firmlinks`（macOS） | 未实现 | |
@@ -335,7 +339,7 @@ cargo check --target x86_64-pc-windows-msvc
 
 待实现（按优先级）：
 
-1. `--exclude PATTERN`、`-x`（不跨文件系统）、`--exclude-caches`；
+1. `--exclude-kernfs`（需要读挂载表判断 Linux 伪文件系统）；
 2. 扩展信息（`-e`：uid/gid/mtime）与按 mtime 排序；
 3. 排序补齐：目录优先（`t`）与 `--enable-natsort` 开关（自然序本身已按 C 版实现）；
 4. 显示项补齐：`--show-*` 五组列开关（图形/百分比/itemcount/mtime）、`--graph-style`（half-block / eighth-block）、目录优先（`t`）；

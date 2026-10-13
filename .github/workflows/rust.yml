@@ -65,6 +65,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: install ncurses headers
         run: sudo apt-get update && sudo apt-get install -y libncurses-dev
+      # configure explicitly, with visible output: if this fails (missing
+      # headers, say) the reason should be readable in the log. The script then
+      # sees a Makefile and only has to run make.
+      - name: configure the C version
+        working-directory: .
+        run: ./configure
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

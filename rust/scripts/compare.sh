@@ -84,9 +84,17 @@ done
 echo "  依赖检查通过"
 
 if [ "$DO_BUILD" = 1 ]; then
+  # A fresh checkout has no Makefile yet, so configure first. Both steps fail
+  # hard: carrying on without a C binary only defers the error to the check
+  # below, where the reason is much less obvious.
+  if [ ! -f "$ROOT/Makefile" ]; then
+    echo "  配置 C 版 (configure) ..."
+    ( cd "$ROOT" && ./configure >/dev/null 2>&1 ) \
+      || { echo "  error: ./configure 失败（需要 ncurses 开发包）" >&2; exit 1; }
+  fi
   echo "  构建 C 版 (make) ..."
   ( cd "$ROOT" && make -j"$(nproc 2>/dev/null || echo 2)" >/dev/null 2>&1 ) \
-    || echo "  warning: make 失败，将使用已有的 C 版二进制"
+    || { echo "  error: make 失败（若 C 版已构建过，可用 --no-build）" >&2; exit 1; }
   echo "  构建 Rust 版 (cargo build --release) ..."
   ( cd "$ROOT/rust" && cargo build --release 2>&1 | tail -1 )
 fi

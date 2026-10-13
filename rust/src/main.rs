@@ -6,10 +6,12 @@
  */
 
 mod app;
+mod backend;
 mod export;
 mod import;
 mod platform;
 mod scan;
+mod theme;
 mod ui;
 
 use std::env;
@@ -20,7 +22,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
-use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::cursor::Show;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::crossterm::execute;
@@ -31,11 +32,12 @@ use ratatui::Terminal;
 
 use app::App;
 use scan::{Scanner, Tree};
+use theme::Theme;
 
 pub const NAME: &str = env!("CARGO_PKG_NAME");
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-type Tui = Terminal<CrosstermBackend<Stdout>>;
+type Tui = Terminal<backend::AnsiBackend<Stdout>>;
 
 /// Entries processed between two checks for user input during the scan.
 const SCAN_BATCH: usize = 4096;
@@ -57,6 +59,7 @@ fn main() -> ExitCode {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut path: Option<PathBuf> = None;
     let mut show_as = false;
+    let mut theme = Theme::default();
     let mut export: Option<PathBuf> = None;
     let mut import: Option<PathBuf> = None;
 
@@ -72,6 +75,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
             "-a" | "--apparent-size" => show_as = true,
+            "--si" => ui::set_si(true),
+            "--no-si" => ui::set_si(false),
+            "--color" => {
+                let value = args.next().ok_or("--color requires a scheme")?;
+                theme = Theme::parse(&value)
+                    .ok_or_else(|| format!("unknown --color option: {value}"))?;
+            }
             "-o" | "--export" => {
                 let file = args.next().ok_or("-o requires a file name")?;
                 export = Some(PathBuf::from(file));
@@ -107,7 +117,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err("browsing an import needs a terminal".into());
         }
         let mut terminal = setup_terminal()?;
-        let outcome = run_browse(&mut terminal, tree, show_as);
+        let outcome = run_browse(&mut terminal, tree, show_as, theme);
         restore_terminal(&mut terminal)?;
         if let Some(note) = outcome? {
             eprintln!("{}", note);
@@ -146,7 +156,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut terminal = setup_terminal()?;
-    let outcome = run_tui(&mut terminal, &path, show_as, export.as_deref());
+    let outcome = run_tui(&mut terminal, &path, show_as, export.as_deref(), theme);
     restore_terminal(&mut terminal)?;
 
     // Anything the user should see is printed after the terminal is restored.
@@ -214,8 +224,9 @@ fn run_browse(
     terminal: &mut Tui,
     tree: Tree,
     show_as: bool,
+    theme: Theme,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
-    let mut app = App::new(tree, show_as, true);
+    let mut app = App::new(tree, show_as, true, theme);
     browse_loop(terminal, &mut app)?;
     Ok(None)
 }
@@ -226,6 +237,7 @@ fn run_tui(
     path: &Path,
     show_as: bool,
     export: Option<&Path>,
+    theme: Theme,
 ) -> Result<Outcome, Box<dyn std::error::Error>> {
     let mut scanner = Scanner::new(path)?;
     let mut aborted = false;
@@ -236,7 +248,7 @@ fn run_tui(
         let redraw = done || last_draw.is_none_or(|t| t.elapsed() >= SCAN_UI_INTERVAL);
 
         if redraw {
-            terminal.draw(|frame| ui::draw_scan(frame, &scanner))?;
+            terminal.draw(|frame| ui::draw_scan(frame, &scanner, &theme.colors()))?;
             last_draw = Some(Instant::now());
             if let Some(key) = poll_key(Duration::ZERO)? {
                 if is_abort_key(&key) {
@@ -288,7 +300,7 @@ fn run_tui(
         });
     }
 
-    let mut app = App::new(tree, show_as, false);
+    let mut app = App::new(tree, show_as, false, theme);
     browse_loop(terminal, &mut app)?;
     Ok(Outcome {
         note: warning,
@@ -360,7 +372,7 @@ fn setup_terminal() -> io::Result<Tui> {
     enable_raw_mode()?;
     let mut out = io::stdout();
     execute!(out, EnterAlternateScreen)?;
-    Terminal::new(CrosstermBackend::new(out))
+    Terminal::new(backend::AnsiBackend::new(out))
 }
 
 fn restore_terminal(terminal: &mut Tui) -> io::Result<()> {
@@ -459,6 +471,8 @@ Usage: {name} [OPTIONS] [PATH]
 
 Options:
   -a, --apparent-size   Show apparent size instead of disk usage
+      --si / --no-si    Use decimal (kB/MB) instead of binary (KiB/MiB) units
+      --color SCHEME    Colour scheme: auto (default), off, dark, dark-bg
   -o, --export FILE     Scan and write the result as JSON to FILE (use - for stdout)
   -f, --import FILE     Load a FILE created with -o and browse it (use - for stdin)
   -h, --help            Show this help and exit
@@ -475,6 +489,8 @@ Keys:
   Right/l/Enter      open the selected directory
   Left/u/Backspace   go back to the parent directory
   n, s, C            sort by name / size / items (press again to reverse)
+  i                  show information about the selected entry
+  ?                  help window (keys / format / about)
   a                  toggle apparent size / disk usage
   d                  delete the selected entry (asks for confirmation)
   r                  re-scan the currently open directory

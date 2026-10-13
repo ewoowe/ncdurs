@@ -241,7 +241,6 @@ pub struct ScanStats {
 
 /// Snapshot of the scan progress, used by the UI.
 pub struct Progress {
-    pub root: String,
     pub current: String,
     pub entries: u64,
     pub errors: u64,
@@ -378,7 +377,6 @@ impl Scanner {
     pub fn progress(&self) -> Progress {
         let cur = self.stack.last().map(|f| f.node).unwrap_or(0);
         Progress {
-            root: self.tree.name(0).to_string(),
             current: self.tree.path_of(cur),
             entries: self.stats.entries,
             errors: self.stats.errors,
@@ -847,7 +845,8 @@ mod tests {
         fs::write(tmp.0.join("a/f1"), vec![b'x'; 4_000]).unwrap();
 
         let (tree, _) = scan(&tmp.0).unwrap();
-        let mut app = crate::app::App::new(tree, false, false);
+        let mut app =
+            crate::app::App::new(tree, false, false, crate::theme::Theme::default());
         app.cur = find_child(&app.tree, 0, "a");
         let dir_before = app.tree.nodes[app.cur].size;
         let root_before = app.tree.nodes[0].size;

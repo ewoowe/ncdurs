@@ -81,7 +81,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 
 ## 与原版 ncdu（C 版 1.22）的对比
 
-下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 30 项、部分实现 4 项、未实现 25 项。
+下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 36 项、部分实现 4 项、未实现 19 项。
 
 ### 数值一致性
 
@@ -146,10 +146,10 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `--si` / `--no-si` | 已实现 | 十进制（kB/MB）与二进制（KiB/MiB）单位切换 |
 | `-a, --apparent-size` / `--disk-usage` | 部分 | 默认即磁盘占用，有 `-a`；没有 `--disk-usage` 显式开关 |
 | `--show-hidden` / `--hide-hidden` | 已实现 | 隐藏点文件、`~` 结尾的备份文件与被排除项（`e` 键同）；只影响列表，不影响尺寸 |
-| `--show-itemcount` / `--hide-itemcount` | 未实现 | 无 itemcount 列（汇总在底栏） |
+| `--show-itemcount` / `--hide-itemcount` | 已实现 | 7 列宽的 itemcount 列，`c` 键同；格式照 `browse_draw_items`（千位分隔 / k / M / `> 1B`） |
 | `--show-mtime` / `--hide-mtime` | 已实现 | 依赖 `-e`；`m` 键同样可切换 |
-| `--show-graph` / `--hide-graph` | 未实现 | 图形列始终显示 |
-| `--show-percent` / `--hide-percent` | 未实现 | 百分比始终显示 |
+| `--show-graph` / `--hide-graph` | 已实现 | 与 `--show-percent` 共同构成 0..3 的 `graph` 值（bit 0 = 条形、bit 1 = 百分比），`g` 键循环 |
+| `--show-percent` / `--hide-percent` | 已实现 | 百分比的基准是**当前目录总量**，与条形的"列表最大值"基准不同（同 C 版） |
 | `--graph-style hash\|half-block\|eighth-block` | 未实现 | 固定 `#` 风格、固定 10 格宽 |
 | `--sort COLUMN` | 未实现 | 界面内 `s` 键可切换排序列 |
 | `--enable-natsort` / `--disable-natsort` | 未实现 | 现为小写字符串比较（原版默认开启自然序） |
@@ -166,9 +166,12 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `→`/`Enter` | 进入目录 | 已实现（另有 `l`） |
 | `←`/`<`/`h` | 返回上级 | 部分：`←` / `u` / `Backspace`（原版用 `<` / `h`） |
 | `n` / `s` / `C` | 按名称 / 大小 / items 排序 | 已实现（同键再按一次反向） |
-| `M` | 按 mtime 排序 | 未实现（依赖 `-e`） |
-| `t` | 排序时目录优先 | 未实现 |
-| `g` | 显示百分比 / 图形 | 未实现（两者始终显示） |
+| `M` | 按 mtime 排序 | 已实现（`-e` 下可用，比较链 `mtime → size → name → items`） |
+| `t` | 排序时目录优先 | 已实现（判断在降序反转之前，所以升序降序都是目录在前） |
+| `g` | 显示百分比 / 图形 | 已实现（0..3 循环：无 / 条形 / 百分比 / 两者） |
+| `c` | 显示 itemcount 列 | 已实现 |
+| `m` | 显示 mtime 列（需 `-e`） | 已实现 |
+| `e` | 显示 / 隐藏隐藏项 | 已实现（点文件、`~` 备份、被排除项；不影响尺寸） |
 | `a` | 切换表观大小 / 磁盘占用 | 已实现 |
 | `c` | 切换子项计数列 | 未实现（底栏始终显示 Items） |
 | `m` | 切换 mtime 列 | 未实现 |
@@ -341,9 +344,8 @@ cargo check --target x86_64-pc-windows-msvc
 待实现（按优先级）：
 
 1. `--exclude-kernfs`（需要读挂载表判断 Linux 伪文件系统）；
-2. itemcount 列（`c` 键）与 `--show-itemcount` 开关、`t`（目录优先）；
-3. 排序补齐：目录优先（`t`）与 `--enable-natsort` 开关（自然序本身已按 C 版实现）；
-4. 显示项补齐：`--show-*` 五组列开关（图形/百分比/itemcount/mtime）、`--graph-style`（half-block / eighth-block）、目录优先（`t`）；
+2. `--graph-style`（half-block / eighth-block）与 `--enable-natsort` / `--disable-natsort` 开关；
+3. `--sort COLUMN` 与 `--sort-dir-first` 类的命令行开关（界面内 `s`/`n`/`C`/`M`/`t` 已可切换）；
 5. Windows 硬链接去重、Windows 隐藏/系统属性过滤；
 6. （可选）内核调用优化：用 `openat`/`fstatat` 或 libc 直调替代 std 的 `statx`；
 7. （可选）arena 垃圾回收（compact），回收删除/刷新留下的不可达节点；

@@ -4,9 +4,9 @@
 
 代码位于本仓库的 `rust/` 子目录，与 C 版源码、Autotools 构建完全独立：`cargo` 只针对 `rust/`，C 版仍用 `./configure && make`，两者互不影响。
 
-> 当前状态：**P0 + 扫描体验 + 删除/刷新/开 shell + 导出/导入 + 界面与 C 版对齐 + 颜色主题**。可以扫描目录（带进度页、可随时中止）、交互浏览、排序、切换大小口径、删除条目（带确认）、重扫当前目录、在当前目录开 shell、与 C 版格式互通的导出/导入；界面（列布局、底栏、扫描页/消息/确认框的居中窗口、`..` 项、帮助页、`i` 信息框）与 C 版逐项对齐，并支持 `--color off|dark|dark-bg` 三套主题；数值与 C 版一致，扫描性能也与 C 版同一量级（见「性能对比」）。
-> 已通过与 C 版的自动化对比（`scripts/compare.sh`：数值、边界用例、性能、双向导出/导入）以及 18 个单元测试。
-> 删除、刷新、排除规则、导出/导入等功能尚未实现，见文末「待实现」。
+> 当前状态：**P0 + 扫描体验 + 删除/刷新/开 shell + 导出/导入 + 排除规则 + 扩展信息（`-e`）+ 界面与 C 版对齐 + 颜色主题**。可以扫描目录（带进度页、可随时中止）、交互浏览（五列：flag / 大小 / 图形 / itemcount / mtime；四个排序列 + 目录优先 + 自然序 + 隐藏过滤）、切换大小口径、删除条目（带确认）、重扫当前目录、在当前目录开 shell、与 C 版格式互通的导出/导入，以及按模式 / 缓存标记 / 文件系统边界排除；界面（列布局、底栏、扫描页与消息/确认框的居中窗口、`..` 项、帮助页、`i` 信息框）与 C 版逐项对齐，`--color` 提供 off / dark / dark-bg / auto 四档，终端输出使用与 ncurses 相同的**经典 8 色码**；数值与 C 版一致，扫描性能也与 C 版同一量级（见「性能对比」）。
+> 已通过与 C 版的自动化对比（`scripts/compare.sh`：数值、边界用例、性能、双向导出/导入）以及 30 个单元测试。
+> 尚未实现的都是次要开关（`--graph-style`、命令行版 `--sort`、部分 `--enable-*` 禁用开关等），见文末「待实现」。
 
 ## 构建与运行
 
@@ -139,10 +139,10 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `--exclude-firmlinks` / `--follow-firmlinks`（macOS） | 未实现 | |
 | `-0` / `-1` / `-2`（UI 级别） | 未实现 | 只有全屏界面 |
 | `-q, --slow-ui-updates` / `--fast-ui-updates` | 未实现 | 扫描期刷新间隔固定 50 ms |
-| `--enable-shell` / `--disable-shell` | 未实现 | 无 shell 功能 |
-| `--enable-delete` / `--disable-delete` | 未实现 | 无删除功能 |
-| `--enable-refresh` / `--disable-refresh` | 未实现 | 无刷新功能 |
-| `-r` / `-rr`（只读） | 未实现 | 当前没有任何破坏性操作 |
+| `--enable-shell` / `--disable-shell` | 未实现 | `b` 键已可用，缺命令行开关 |
+| `--enable-delete` / `--disable-delete` | 未实现 | `d` 键已可用（带确认），缺命令行开关 |
+| `--enable-refresh` / `--disable-refresh` | 未实现 | `r` 键已可用，缺命令行开关 |
+| `-r` / `-rr`（只读） | 未实现 | 尚无只读模式（`d`/`r`/`b` 本身可用） |
 | `--si` / `--no-si` | 已实现 | 十进制（kB/MB）与二进制（KiB/MiB）单位切换 |
 | `-a, --apparent-size` / `--disk-usage` | 部分 | 默认即磁盘占用，有 `-a`；没有 `--disk-usage` 显式开关 |
 | `--show-hidden` / `--hide-hidden` | 已实现 | 隐藏点文件、`~` 结尾的备份文件与被排除项（`e` 键同）；只影响列表，不影响尺寸 |
@@ -150,12 +150,12 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `--show-mtime` / `--hide-mtime` | 已实现 | 依赖 `-e`；`m` 键同样可切换 |
 | `--show-graph` / `--hide-graph` | 已实现 | 与 `--show-percent` 共同构成 0..3 的 `graph` 值（bit 0 = 条形、bit 1 = 百分比），`g` 键循环 |
 | `--show-percent` / `--hide-percent` | 已实现 | 百分比的基准是**当前目录总量**，与条形的"列表最大值"基准不同（同 C 版） |
-| `--graph-style hash\|half-block\|eighth-block` | 未实现 | 固定 `#` 风格、固定 10 格宽 |
-| `--sort COLUMN` | 未实现 | 界面内 `s` 键可切换排序列 |
-| `--enable-natsort` / `--disable-natsort` | 未实现 | 现为小写字符串比较（原版默认开启自然序） |
-| `--group-directories-first` / `--no-group-directories-first` | 未实现 | |
+| `--graph-style hash\|half-block\|eighth-block` | 未实现 | 固定 `#` 风格；**宽度已自适应**（`max(wincols/7, 10)`） |
+| `--sort COLUMN` | 未实现 | 界面内 `s`/`n`/`C`/`M` 已可切换排序列 |
+| `--enable-natsort` / `--disable-natsort` | 未实现 | 自然序已照 `deps/strnatcmp.c` 实现并默认开启 |
+| `--group-directories-first` / `--no-group-directories-first` | 未实现 | 界面内 `t` 键已可用 |
 | `--confirm-quit` / `--no-confirm-quit` | 未实现 | 退出无二次确认 |
-| `--confirm-delete` / `--no-confirm-delete` | 未实现 | 无删除功能 |
+| `--confirm-delete` / `--no-confirm-delete` | 未实现 | 删除默认就有 `y/n` 确认（含"don't ask me again"），缺命令行开关 |
 | `--color off\|dark\|dark-bg` | 已实现 | 三套主题逐槽照抄 `src/util.h` 的 `UI_COLORS`；另加原版没有的 `auto` 并作为默认（`NO_COLOR` 已设置、或 `TERM` 为空 / `dumb` 时回退 `off`，否则用 `dark`） |
 
 ### 界面按键
@@ -173,10 +173,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `m` | 显示 mtime 列（需 `-e`） | 已实现 |
 | `e` | 显示 / 隐藏隐藏项 | 已实现（点文件、`~` 备份、被排除项；不影响尺寸） |
 | `a` | 切换表观大小 / 磁盘占用 | 已实现 |
-| `c` | 切换子项计数列 | 未实现（底栏始终显示 Items） |
-| `m` | 切换 mtime 列 | 未实现 |
-| `e` | 显示/隐藏 隐藏与排除项 | 未实现 |
-| `i` | 显示选中项信息 | 未实现 |
+| `i` | 显示选中项信息 | 已实现（`-e` 时含 `Mode`/`UID`/`GID`/`Last modified`） |
 | `r` | 重算当前目录 | 已实现（重扫后替换该目录的子树） |
 | `b` | 在当前目录开 shell | 已实现（`NCDU_SHELL` → `$SHELL` → `/bin/sh`，经 shell 解析，可带参数） |
 | `d` | 删除选中项 | 已实现（先弹 `y`/`n` 确认；目录按递归删除） |
@@ -191,11 +188,11 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | --- | --- | --- |
 | 扫描进度页（当前路径 / 条目数 / 已扫大小 / 可中止） | 支持 | 已实现 |
 | 硬链接去重 | 支持（并标记 `H`） | 支持（Unix；Windows 暂缺，且无标记） |
-| 条目状态标记（`!` `.` `<` `e` `>` `@` `^` `H` `F`） | 9 种，显示在名称前 | 仅错误条目附加 `[error]` 文本；非普通文件（符号链接等）的 `notreg` 标记已存入数据并在导出文件中保留，界面暂不显示标记 |
+| 条目状态标记（`!` `.` `<` `e` `>` `@` `^` `H` `F`） | 9 种，显示在名称前 | 已实现 `!`（错误）、`<`（被排除）、`>`（其它文件系统）、`e`（空目录）、`@`（非普通文件）五种；缺 `^`（Linux 伪文件系统，需 `--exclude-kernfs`）、`H`（硬链接，需记账方式对齐）、`F`（firmlink）、`.`（子目录读取错误） |
 | 配置文件（`/etc/ncdu.conf`、`~/.config/ncdu/config`） | 支持 | 未实现 |
 | 环境变量 `NCDU_SHELL`、`NCDU_LEVEL` | 支持 | 已实现（`b` 使用；`NCDU_LEVEL` 每次会话递增一次） |
-| 导出 / 导入 JSON | 支持 | 未实现 |
-| 显示列（图 / 百分比 / itemcount / mtime） | 可自由开关 | 固定：大小 + 图形 + 百分比 |
+| 导出 / 导入 JSON | 支持 | 已实现（与 C 版双向互通，见「用法」） |
+| 显示列（图 / 百分比 / itemcount / mtime） | 可自由开关 | 已实现（`--show-*` 开关与 `c`/`m`/`g` 键） |
 | 颜色主题 | 3 种（off / dark / dark-bg） | 已实现（`--color`，默认 `auto`：终端支持彩色就用 `dark`，否则回退 `off`；数值/目录/图形/标记各按其色槽着色） |
 | 跨平台 | Linux / macOS / *BSD（不支持 Windows） | Linux / macOS / *BSD / Windows（Windows 尚未真机验证） |
 
@@ -210,7 +207,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | 峰值内存 RSS | 55 MiB | 53 MiB |
 | 二进制体积（release） | 281 KiB | 1.01 MiB（strip 后 810 KiB） |
 | 参考：`du -s --block-size=512 /usr` | 7.6 s | — |
-| 参考：C 版 `ncdu -o- /usr`（不建树，纯扫描 + 序列化） | 4.6 s | 未实现导出 |
+| 参考：C 版 `ncdu -o- /usr`（不建树，纯扫描 + 序列化） | 4.6 s | 已支持 `-o`，未单独计时 |
 
 两版处于同一量级，ncdurs 略优。ncdurs 侧的手段是名字集中存放（name arena）+ 容量预分配 + 降低扫描期渲染频率，把同一场景的 CPU 时间从 3.60 s 压到 1.74 s、RSS 从 72 MiB 压到 53 MiB。内核侧 ncdurs 反而更贵一些：Rust 标准库使用 `statx` 而不是 `lstat`（strace 实测约 2 万次 `statx`），这部分开销被用户态分配的减少抵消了。
 
@@ -346,10 +343,10 @@ cargo check --target x86_64-pc-windows-msvc
 1. `--exclude-kernfs`（需要读挂载表判断 Linux 伪文件系统）；
 2. `--graph-style`（half-block / eighth-block）与 `--enable-natsort` / `--disable-natsort` 开关；
 3. `--sort COLUMN` 与 `--sort-dir-first` 类的命令行开关（界面内 `s`/`n`/`C`/`M`/`t` 已可切换）；
-5. Windows 硬链接去重、Windows 隐藏/系统属性过滤；
-6. （可选）内核调用优化：用 `openat`/`fstatat` 或 libc 直调替代 std 的 `statx`；
-7. （可选）arena 垃圾回收（compact），回收删除/刷新留下的不可达节点；
-8. （可选）硬链接记账方式对齐 C 版（逐祖先链计数、`H` 标记、导出保留每条链接的自身大小），见「硬链接记账方式的差异」。
+4. Windows 硬链接去重、Windows 隐藏/系统属性过滤；
+5. （可选）内核调用优化：用 `openat`/`fstatat` 或 libc 直调替代 std 的 `statx`；
+6. （可选）arena 垃圾回收（compact），回收删除/刷新留下的不可达节点；
+7. （可选）硬链接记账方式对齐 C 版（逐祖先链计数、`H` 标记、导出保留每条链接的自身大小），见「硬链接记账方式的差异」。
 
 ## 许可
 

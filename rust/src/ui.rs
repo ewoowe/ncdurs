@@ -37,7 +37,12 @@ fn frame_layout(f: &mut Frame) -> std::rc::Rc<[Rect]> {
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let chunks = frame_layout(f);
-    draw_status(f, chunks[0], KEYS_HINT);
+    if app.imported {
+        // The tree was loaded from a file and does not describe the disk.
+        draw_status(f, chunks[0], &format!("{KEYS_HINT}  [imported]"));
+    } else {
+        draw_status(f, chunks[0], KEYS_HINT);
+    }
     draw_path(f, chunks[1], &app.cur_path());
     app.view_height = chunks[2].height as usize;
     draw_list(f, app, chunks[2]);

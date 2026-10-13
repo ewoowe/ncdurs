@@ -55,6 +55,9 @@ pub struct Node {
     pub children: Vec<usize>,
     pub is_dir: bool,
     pub error: bool,
+    /// Neither a directory nor a regular file (symlink, socket, fifo, device).
+    /// The C version records this as `notreg` in its exports.
+    pub notreg: bool,
 }
 
 pub struct Tree {
@@ -64,7 +67,7 @@ pub struct Tree {
 }
 
 impl Tree {
-    fn new() -> Tree {
+    pub(crate) fn new() -> Tree {
         Tree {
             nodes: Vec::with_capacity(INITIAL_NODES),
             names: String::with_capacity(INITIAL_NAMES),
@@ -74,6 +77,25 @@ impl Tree {
     fn push(&mut self, node: Node) -> usize {
         self.nodes.push(node);
         self.nodes.len() - 1
+    }
+
+    /// Creates a node for `name` under `parent` and returns its index. Used
+    /// when loading an exported file; the caller fills in sizes/items.
+    pub(crate) fn push_node(&mut self, parent: Option<usize>, name: &str, is_dir: bool) -> usize {
+        let name = self.intern(name);
+        let idx = self.push(Node {
+            name,
+            size: 0,
+            asize: 0,
+            items: 0,
+            parent,
+            children: Vec::new(),
+            is_dir,
+            error: false,
+            notreg: false,
+        });
+        self.attach(parent, idx);
+        idx
     }
 
     fn attach(&mut self, parent: Option<usize>, child: usize) {
@@ -306,6 +328,7 @@ impl Scanner {
             children: Vec::new(),
             is_dir: true,
             error: false,
+            notreg: false,
         });
 
         let (names, list_failed) = scanner.read_names();
@@ -415,6 +438,7 @@ impl Scanner {
                     children: Vec::new(),
                     is_dir: false,
                     error: true,
+                    notreg: false,
                 });
                 self.tree.attach(Some(parent), idx);
                 self.stats.entries += 1;
@@ -448,6 +472,9 @@ impl Scanner {
             children: Vec::new(),
             is_dir,
             error: false,
+            // Symlinks, sockets, fifos and device nodes: what the C version
+            // records as "notreg" (neither a directory nor a regular file).
+            notreg: !is_dir && !md.is_file(),
         });
         self.tree.attach(Some(parent), idx);
         self.stats.entries += 1;
@@ -820,7 +847,7 @@ mod tests {
         fs::write(tmp.0.join("a/f1"), vec![b'x'; 4_000]).unwrap();
 
         let (tree, _) = scan(&tmp.0).unwrap();
-        let mut app = crate::app::App::new(tree, false);
+        let mut app = crate::app::App::new(tree, false, false);
         app.cur = find_child(&app.tree, 0, "a");
         let dir_before = app.tree.nodes[app.cur].size;
         let root_before = app.tree.nodes[0].size;
@@ -837,5 +864,25 @@ mod tests {
             app.tree.nodes[0].size,
             root_before - dir_before + app.tree.nodes[app.cur].size
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn marks_non_regular_files() {
+        let _guard = lock();
+        let tmp = TempDir::new("notreg");
+        fs::write(tmp.0.join("regular"), b"x").unwrap();
+        std::os::unix::fs::symlink("regular", tmp.0.join("link")).unwrap();
+
+        let (tree, _) = scan(&tmp.0).unwrap();
+        let regular = find_child(&tree, 0, "regular");
+        let link = find_child(&tree, 0, "link");
+
+        assert!(!tree.nodes[regular].notreg);
+        assert!(tree.nodes[link].notreg);
+        assert!(!tree.nodes[link].is_dir);
+        assert!(!tree.nodes[link].error);
+        // Symlinks are not followed: no disk blocks of their own.
+        assert_eq!(tree.nodes[link].size, 0);
     }
 }

@@ -6,6 +6,8 @@
  */
 
 mod app;
+mod export;
+mod import;
 mod platform;
 mod scan;
 mod ui;
@@ -13,7 +15,7 @@ mod ui;
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{self, Stdout};
+use std::io::{self, IsTerminal, Stdout, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
@@ -28,7 +30,7 @@ use ratatui::crossterm::terminal::{
 use ratatui::Terminal;
 
 use app::App;
-use scan::Scanner;
+use scan::{Scanner, Tree};
 
 pub const NAME: &str = env!("CARGO_PKG_NAME");
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -55,8 +57,11 @@ fn main() -> ExitCode {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut path: Option<PathBuf> = None;
     let mut show_as = false;
+    let mut export: Option<PathBuf> = None;
+    let mut import: Option<PathBuf> = None;
 
-    for arg in env::args().skip(1) {
+    let mut args = env::args().skip(1);
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "-h" | "--help" => {
                 print!("{}", usage());
@@ -67,6 +72,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
             "-a" | "--apparent-size" => show_as = true,
+            "-o" | "--export" => {
+                let file = args.next().ok_or("-o requires a file name")?;
+                export = Some(PathBuf::from(file));
+            }
+            "-f" | "--import" => {
+                let file = args.next().ok_or("-f requires a file name")?;
+                import = Some(PathBuf::from(file));
+            }
             _ if arg.starts_with('-') && arg != "-" => {
                 return Err(format!("unknown option '{}', try --help", arg).into());
             }
@@ -79,6 +92,30 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Mode 1: load an export file ("-" = stdin), optionally re-exporting it
+    // instead of browsing.
+    if let Some(file) = &import {
+        if path.is_some() {
+            return Err("a path cannot be combined with -f".into());
+        }
+        let tree = read_export(file)?;
+        if let Some(out) = &export {
+            write_export(&tree, out)?;
+            return Ok(());
+        }
+        if !io::stdout().is_terminal() {
+            return Err("browsing an import needs a terminal".into());
+        }
+        let mut terminal = setup_terminal()?;
+        let outcome = run_browse(&mut terminal, tree, show_as);
+        restore_terminal(&mut terminal)?;
+        if let Some(note) = outcome? {
+            eprintln!("{}", note);
+        }
+        return Ok(());
+    }
+
+    // Mode 2: scan a directory, optionally exporting instead of browsing.
     let path = path.unwrap_or_else(|| PathBuf::from("."));
 
     // Validate before entering the terminal, so errors stay readable.
@@ -87,24 +124,109 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("{}: not a directory", path.display()).into());
     }
 
+    // Exporting does not need a terminal: when stdout is redirected (a pipe or
+    // a file) scan without the progress screen, so it works from scripts.
+    if let Some(file) = export.as_deref() {
+        if !io::stdout().is_terminal() {
+            let (tree, warning) = scan_plain(&path)?;
+            let entries = tree.nodes.len();
+            if file == Path::new("-") {
+                let mut out = io::stdout().lock();
+                export::write(&tree, &mut out).map_err(|e| format!("stdout: {e}"))?;
+                out.flush()?;
+            } else {
+                write_export(&tree, file)?;
+                eprintln!("exported {entries} entries to {}", file.display());
+            }
+            if let Some(warning) = warning {
+                eprintln!("{warning}");
+            }
+            return Ok(());
+        }
+    }
+
     let mut terminal = setup_terminal()?;
-    let outcome = run_tui(&mut terminal, &path, show_as);
+    let outcome = run_tui(&mut terminal, &path, show_as, export.as_deref());
     restore_terminal(&mut terminal)?;
 
     // Anything the user should see is printed after the terminal is restored.
-    if let Some(note) = outcome? {
+    let outcome = outcome?;
+    if let Some(data) = outcome.stdout_export {
+        let mut out = io::stdout().lock();
+        out.write_all(&data)?;
+        out.flush()?;
+    }
+    if let Some(note) = outcome.note {
         eprintln!("{}", note);
     }
     Ok(())
 }
 
-/// Scans with a progress screen, then browses the result. Returns a message to
-/// print once the terminal has been restored.
+/// Scans without any terminal interaction (used when stdout is redirected).
+fn scan_plain(path: &Path) -> Result<(Tree, Option<String>), Box<dyn std::error::Error>> {
+    let mut scanner = Scanner::new(path)?;
+    while !scanner.step(SCAN_BATCH) {}
+    if let Some(err) = scanner.failure().map(|e| e.to_string()) {
+        scanner.abort();
+        return Err(format!("scan failed: {err}").into());
+    }
+    let (tree, stats) = scanner.into_result();
+    let warning = (stats.errors > 0)
+        .then(|| format!("Warning: {} entries could not be read", stats.errors));
+    Ok((tree, warning))
+}
+
+/// Opens an export file ("-" = stdin) and loads it into a tree.
+fn read_export(file: &Path) -> Result<Tree, Box<dyn std::error::Error>> {
+    let result = if file == Path::new("-") {
+        import::read(io::stdin().lock())
+    } else {
+        let f = fs::File::open(file).map_err(|e| format!("{}: {}", file.display(), e))?;
+        import::read(io::BufReader::new(f))
+    };
+    result.map_err(|e| format!("{}: {}", file.display(), e).into())
+}
+
+/// Writes the tree as an ncdu-compatible export file ("-" = stdout).
+fn write_export(tree: &Tree, file: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    if file == Path::new("-") {
+        let mut out = io::stdout().lock();
+        export::write(tree, &mut out).map_err(|e| format!("stdout: {e}"))?;
+    } else {
+        let f = fs::File::create(file).map_err(|e| format!("{}: {}", file.display(), e))?;
+        let mut out = io::BufWriter::new(f);
+        export::write(tree, &mut out).map_err(|e| format!("{}: {}", file.display(), e))?;
+    }
+    Ok(())
+}
+
+/// What a terminal session produced; handled after the terminal is restored.
+#[derive(Default)]
+struct Outcome {
+    /// Message to print on stderr.
+    note: Option<String>,
+    /// Export data destined for stdout (only used for `-o -`).
+    stdout_export: Option<Vec<u8>>,
+}
+
+/// Browses an already loaded tree (used with -f).
+fn run_browse(
+    terminal: &mut Tui,
+    tree: Tree,
+    show_as: bool,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let mut app = App::new(tree, show_as, true);
+    browse_loop(terminal, &mut app)?;
+    Ok(None)
+}
+
+/// Scans with a progress screen, then browses or exports the result.
 fn run_tui(
     terminal: &mut Tui,
     path: &Path,
     show_as: bool,
-) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    export: Option<&Path>,
+) -> Result<Outcome, Box<dyn std::error::Error>> {
     let mut scanner = Scanner::new(path)?;
     let mut aborted = false;
     let mut last_draw: Option<Instant> = None;
@@ -130,7 +252,10 @@ fn run_tui(
 
     if aborted {
         scanner.abort();
-        return Ok(Some("Scan aborted".to_string()));
+        return Ok(Outcome {
+            note: Some("Scan aborted".to_string()),
+            stdout_export: None,
+        });
     }
     if let Some(err) = scanner.failure() {
         let msg = format!("scan failed: {err}");
@@ -139,27 +264,57 @@ fn run_tui(
     }
 
     let (tree, stats) = scanner.into_result();
-    let note = (stats.errors > 0)
+    let warning = (stats.errors > 0)
         .then(|| format!("Warning: {} entries could not be read", stats.errors));
 
-    let mut app = App::new(tree, show_as);
-    while !app.quit {
-        terminal.draw(|frame| ui::draw(frame, &mut app))?;
+    if let Some(file) = export {
+        let entries = tree.nodes.len();
+        if file == Path::new("-") {
+            let mut buf = Vec::new();
+            export::write(&tree, &mut buf).map_err(|e| format!("export: {e}"))?;
+            return Ok(Outcome {
+                note: Some(format!("exported {entries} entries to stdout")),
+                stdout_export: Some(buf),
+            });
+        }
+        write_export(&tree, file)?;
+        let note = format!("exported {entries} entries to {}", file.display());
+        return Ok(Outcome {
+            note: Some(match warning {
+                Some(w) => format!("{w}; {note}"),
+                None => note,
+            }),
+            stdout_export: None,
+        });
+    }
 
-        // Delete / refresh run synchronously; redraw once with the hint so the
-        // user sees what is going on before the terminal blocks.
+    let mut app = App::new(tree, show_as, false);
+    browse_loop(terminal, &mut app)?;
+    Ok(Outcome {
+        note: warning,
+        stdout_export: None,
+    })
+}
+
+/// The browse screen: draws the app and runs the jobs it requests.
+fn browse_loop(terminal: &mut Tui, app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
+    while !app.quit {
+        terminal.draw(|frame| ui::draw(frame, app))?;
+
+        // Delete / refresh / shell run synchronously; redraw once with the hint
+        // so the user sees what is going on before the terminal blocks.
         if let Some(job) = app.job.take() {
             app.notice = Some(match &job {
                 app::Job::Delete(_) => ("deleting...".to_string(), false),
                 app::Job::Refresh => ("refreshing...".to_string(), false),
                 app::Job::Shell => ("starting shell...".to_string(), false),
             });
-            terminal.draw(|frame| ui::draw(frame, &mut app))?;
+            terminal.draw(|frame| ui::draw(frame, app))?;
             match job {
                 app::Job::Delete(idx) => app.run_delete(idx),
                 app::Job::Refresh => app.run_refresh(),
                 app::Job::Shell => {
-                    let note = run_shell(terminal, &app);
+                    let note = run_shell(terminal, app);
                     app.notice = note;
                 }
             }
@@ -170,8 +325,7 @@ fn run_tui(
             app.on_key(key);
         }
     }
-
-    Ok(note)
+    Ok(())
 }
 
 /// Waits up to `timeout` for a key press; returns None for other events.
@@ -265,6 +419,10 @@ fn spawn_shell(shell: &OsStr, dir: &str, level: &str) -> io::Result<std::process
 /// the TUI. Returns a footer message on failure (success is silent, like the
 /// C version).
 fn run_shell(terminal: &mut Tui, app: &App) -> Option<(String, bool)> {
+    if app.imported {
+        return Some(("unavailable: this tree was imported".to_string(), true));
+    }
+
     let path = app.cur_path();
     if !Path::new(&path).is_dir() {
         return Some((format!("shell: {path} is no longer a directory"), true));
@@ -301,6 +459,8 @@ Usage: {name} [OPTIONS] [PATH]
 
 Options:
   -a, --apparent-size   Show apparent size instead of disk usage
+  -o, --export FILE     Scan and write the result as JSON to FILE (use - for stdout)
+  -f, --import FILE     Load a FILE created with -o and browse it (use - for stdin)
   -h, --help            Show this help and exit
   -V, --version         Print version
 
@@ -324,6 +484,9 @@ Keys:
 Notes:
   The size of a directory includes all of its subdirectories.
   Hard links are counted only once, symlinks are not followed.
+  The export format is interchangeable with ncdu's own JSON, e.g.
+  'ncdurs -o - /usr | ncdu -f -'. A tree loaded with -f does not describe the
+  filesystem, so refresh, delete and the shell are disabled for it.
 ",
         name = NAME,
         version = VERSION

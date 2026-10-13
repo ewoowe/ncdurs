@@ -58,6 +58,10 @@ pub struct App {
     /// Show apparent size instead of disk usage.
     pub show_as: bool,
     pub quit: bool,
+    /// The tree was loaded from an export file: it does not describe the
+    /// filesystem, so delete, refresh and the shell are disabled (same
+    /// behaviour as the C version).
+    pub imported: bool,
     /// Height of the list area, updated while drawing.
     pub view_height: usize,
     pub list_state: ListState,
@@ -70,7 +74,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(tree: Tree, show_as: bool) -> App {
+    pub fn new(tree: Tree, show_as: bool, imported: bool) -> App {
         let mut app = App {
             tree,
             cur: 0,
@@ -80,6 +84,7 @@ impl App {
             sort_desc: true,
             show_as,
             quit: false,
+            imported,
             view_height: 10,
             list_state: ListState::default(),
             confirm: None,
@@ -301,9 +306,27 @@ impl App {
                 self.show_as = !self.show_as;
                 self.resort();
             }
-            KeyCode::Char('d') => self.request_delete(),
-            KeyCode::Char('r') => self.job = Some(Job::Refresh),
-            KeyCode::Char('b') => self.job = Some(Job::Shell),
+            KeyCode::Char('d') => {
+                if self.imported {
+                    self.notice = Some(("unavailable: this tree was imported".to_string(), true));
+                } else {
+                    self.request_delete();
+                }
+            }
+            KeyCode::Char('r') => {
+                if self.imported {
+                    self.notice = Some(("unavailable: this tree was imported".to_string(), true));
+                } else {
+                    self.job = Some(Job::Refresh);
+                }
+            }
+            KeyCode::Char('b') => {
+                if self.imported {
+                    self.notice = Some(("unavailable: this tree was imported".to_string(), true));
+                } else {
+                    self.job = Some(Job::Shell);
+                }
+            }
             _ => {}
         }
     }

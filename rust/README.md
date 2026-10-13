@@ -39,6 +39,7 @@ ncdurs [OPTIONS] [PATH]
 -X, --exclude-from FILE 从文件读取排除模式，每行一个
 -x, --one-file-system 不跨文件系统
     --exclude-caches  跳过含 CACHEDIR.TAG 的目录
+-e, --extended       收集 uid/gid/mode/mtime（启用 mtime 列与 m/M 键）
 -h, --help            显示帮助
 -V, --version         显示版本
 ```
@@ -80,7 +81,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 
 ## 与原版 ncdu（C 版 1.22）的对比
 
-下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 24 项、部分实现 4 项、未实现 31 项。
+下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 30 项、部分实现 4 项、未实现 25 项。
 
 ### 数值一致性
 
@@ -128,7 +129,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `-v, -V, --version` | 部分 | 有 `-V` / `--version`，无 `-v` |
 | `-f FILE`（导入扫描结果） | 已实现 | 与 C 版 JSON 互通；`-` 表示 stdin；导入后禁用删除/刷新/shell |
 | `-o FILE`（导出为 JSON） | 已实现 | 与 C 版 JSON 互通；`-` 表示 stdout，重定向时不启界面 |
-| `-e, --extended, --no-extended` | 未实现 | 当前不保存 uid/gid/mtime |
+| `-e, --extended, --no-extended` | 已实现 | 保存 uid/gid/mode/mtime，导出字段与 C 版逐字节一致；信息框改用 `Mode`/`UID`/`GID`/`Last modified` |
 | `--ignore-config` | 未实现 | 尚无配置文件 |
 | `-x, --one-file-system` / `--cross-file-system` | 已实现 | 目录标 `>`，不深入且不计入 |
 | `--exclude PATTERN` / `-X, --exclude-from FILE` | 已实现 | 匹配整条路径与它的每个后缀（`fnmatch` 语义，`*` 跨 `/`）；命中的目录标 `<` 且不深入 |
@@ -144,9 +145,9 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `-r` / `-rr`（只读） | 未实现 | 当前没有任何破坏性操作 |
 | `--si` / `--no-si` | 已实现 | 十进制（kB/MB）与二进制（KiB/MiB）单位切换 |
 | `-a, --apparent-size` / `--disk-usage` | 部分 | 默认即磁盘占用，有 `-a`；没有 `--disk-usage` 显式开关 |
-| `--show-hidden` / `--hide-hidden` | 未实现 | |
+| `--show-hidden` / `--hide-hidden` | 已实现 | 隐藏点文件、`~` 结尾的备份文件与被排除项（`e` 键同）；只影响列表，不影响尺寸 |
 | `--show-itemcount` / `--hide-itemcount` | 未实现 | 无 itemcount 列（汇总在底栏） |
-| `--show-mtime` / `--hide-mtime` | 未实现 | 依赖 `-e` |
+| `--show-mtime` / `--hide-mtime` | 已实现 | 依赖 `-e`；`m` 键同样可切换 |
 | `--show-graph` / `--hide-graph` | 未实现 | 图形列始终显示 |
 | `--show-percent` / `--hide-percent` | 未实现 | 百分比始终显示 |
 | `--graph-style hash\|half-block\|eighth-block` | 未实现 | 固定 `#` 风格、固定 10 格宽 |
@@ -340,7 +341,7 @@ cargo check --target x86_64-pc-windows-msvc
 待实现（按优先级）：
 
 1. `--exclude-kernfs`（需要读挂载表判断 Linux 伪文件系统）；
-2. 扩展信息（`-e`：uid/gid/mtime）与按 mtime 排序；
+2. itemcount 列（`c` 键）与 `--show-itemcount` 开关、`t`（目录优先）；
 3. 排序补齐：目录优先（`t`）与 `--enable-natsort` 开关（自然序本身已按 C 版实现）；
 4. 显示项补齐：`--show-*` 五组列开关（图形/百分比/itemcount/mtime）、`--graph-style`（half-block / eighth-block）、目录优先（`t`）；
 5. Windows 硬链接去重、Windows 隐藏/系统属性过滤；

@@ -124,6 +124,91 @@ impl Tree {
             path.to_string_lossy().into_owned()
         }
     }
+
+    /// Detaches a node from its parent's child list.
+    fn detach(&mut self, idx: usize) {
+        if let Some(parent) = self.nodes[idx].parent {
+            if let Some(pos) = self.nodes[parent].children.iter().position(|&c| c == idx) {
+                self.nodes[parent].children.remove(pos);
+            }
+        }
+    }
+
+    /// Removes a node together with its subtree: the totals of all ancestors
+    /// are reduced, then the node is detached from its parent.
+    ///
+    /// The nodes themselves stay in the arena as unreachable garbage - a
+    /// compact pass can be added later if it ever matters. Nothing holds
+    /// indices into a removed subtree, so this is safe.
+    pub fn remove_subtree(&mut self, idx: usize) {
+        let n = &self.nodes[idx];
+        if n.parent.is_none() {
+            return; // the root cannot be removed
+        }
+        let (size, asize, items) = (n.size, n.asize, n.items + 1);
+        let mut par = n.parent;
+        while let Some(p) = par {
+            let pn = &mut self.nodes[p];
+            pn.size = pn.size.saturating_sub(size);
+            pn.asize = pn.asize.saturating_sub(asize);
+            pn.items = pn.items.saturating_sub(items);
+            par = pn.parent;
+        }
+        self.detach(idx);
+    }
+
+    /// Replaces `target` (and its subtree) with the freshly scanned tree
+    /// `other`, whose root becomes the new content of `target`; the ancestor
+    /// totals are adjusted by the difference and the old subtree becomes
+    /// garbage. Used by the `r` (refresh) action.
+    pub fn graft(&mut self, target: usize, other: Tree) {
+        let old_size = self.nodes[target].size;
+        let old_asize = self.nodes[target].asize;
+        let old_items = self.nodes[target].items + 1;
+        let parent = self.nodes[target].parent;
+        let old_name = self.nodes[target].name;
+
+        let base = self.nodes.len();
+        // other's index i -> our index (0 becomes `target`, the rest are appended)
+        let remap = |i: usize| if i == 0 { target } else { base + i - 1 };
+
+        // Move the whole name arena over in one go: only the offsets change.
+        let offset = self.names.len() as u32;
+        self.names.push_str(&other.names);
+
+        let mut nodes = other.nodes.into_iter();
+        if let Some(mut root) = nodes.next() {
+            // Keep the slot identity: same name, same place in the parent.
+            root.name = old_name;
+            root.parent = parent;
+            for c in root.children.iter_mut() {
+                *c = remap(*c);
+            }
+            self.nodes[target] = root;
+        }
+        for mut n in nodes {
+            n.name.start += offset;
+            n.parent = n.parent.map(remap);
+            for c in n.children.iter_mut() {
+                *c = remap(*c);
+            }
+            self.nodes.push(n);
+        }
+
+        // Adjust the ancestors by the size/items difference.
+        let (new_size, new_asize, new_items) = {
+            let n = &self.nodes[target];
+            (n.size, n.asize, n.items + 1)
+        };
+        let mut par = parent;
+        while let Some(p) = par {
+            let pn = &mut self.nodes[p];
+            pn.size = pn.size.saturating_sub(old_size).saturating_add(new_size);
+            pn.asize = pn.asize.saturating_sub(old_asize).saturating_add(new_asize);
+            pn.items = pn.items.saturating_sub(old_items).saturating_add(new_items);
+            par = pn.parent;
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -661,5 +746,96 @@ mod tests {
 
         let _ = scan(&tmp.0).unwrap();
         assert_eq!(env::current_dir().unwrap(), before);
+    }
+
+    #[test]
+    fn remove_subtree_updates_ancestors() {
+        let _guard = lock();
+        let tmp = TempDir::new("rm");
+        fs::create_dir(tmp.0.join("sub")).unwrap();
+        fs::write(tmp.0.join("sub/f1"), vec![b'x'; 10_000]).unwrap();
+        fs::write(tmp.0.join("f2"), vec![b'y'; 5_000]).unwrap();
+
+        let (mut tree, _) = scan(&tmp.0).unwrap();
+        let root_size = tree.nodes[0].size;
+        let root_items = tree.nodes[0].items;
+        let sub_idx = find_child(&tree, 0, "sub");
+        let sub_size = tree.nodes[sub_idx].size;
+        let sub_items = tree.nodes[sub_idx].items;
+
+        tree.remove_subtree(sub_idx);
+
+        assert_eq!(tree.nodes[0].size, root_size - sub_size);
+        assert_eq!(tree.nodes[0].items, root_items - sub_items - 1);
+        assert!(tree.nodes[0].children.iter().all(|&c| c != sub_idx));
+        // The arena stays intact: the detached node is just unreachable.
+        assert!(tree.path_of(sub_idx).ends_with("sub"));
+    }
+
+    #[test]
+    fn graft_replaces_subtree_consistently() {
+        let _guard = lock();
+        let tmp = TempDir::new("graft");
+        fs::create_dir(tmp.0.join("d")).unwrap();
+        fs::write(tmp.0.join("d/f1"), vec![b'x'; 4_000]).unwrap();
+        fs::write(tmp.0.join("keep"), vec![b'y'; 2_000]).unwrap();
+
+        let (mut tree, _) = scan(&tmp.0).unwrap();
+        let d_idx = find_child(&tree, 0, "d");
+        let root_size = tree.nodes[0].size;
+        let old_d_size = tree.nodes[d_idx].size;
+        let root_items = tree.nodes[0].items;
+        let name = tree.name(d_idx).to_string();
+
+        let (fresh, _) = scan(&tmp.0.join("d")).unwrap();
+        tree.graft(d_idx, fresh);
+
+        // The slot keeps its identity ...
+        assert_eq!(tree.name(d_idx), name);
+        assert_eq!(tree.nodes[d_idx].parent, Some(0));
+        // ... its children are remapped and reachable ...
+        let f1 = find_child(&tree, d_idx, "f1");
+        assert!(tree.path_of(f1).ends_with("f1"));
+        assert_eq!(
+            tree.nodes[d_idx].size,
+            own_size(&tmp.0.join("d")) + own_size(&tmp.0.join("d/f1"))
+        );
+        // ... and the ancestors see exactly the difference.
+        assert_eq!(
+            tree.nodes[0].size,
+            root_size - old_d_size + tree.nodes[d_idx].size
+        );
+        assert_eq!(tree.nodes[0].items, root_items);
+        assert_eq!(
+            tree.nodes[0].children.iter().filter(|&&c| c == d_idx).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn refresh_picks_up_changes() {
+        let _guard = lock();
+        let tmp = TempDir::new("refresh");
+        fs::create_dir(tmp.0.join("a")).unwrap();
+        fs::write(tmp.0.join("a/f1"), vec![b'x'; 4_000]).unwrap();
+
+        let (tree, _) = scan(&tmp.0).unwrap();
+        let mut app = crate::app::App::new(tree, false);
+        app.cur = find_child(&app.tree, 0, "a");
+        let dir_before = app.tree.nodes[app.cur].size;
+        let root_before = app.tree.nodes[0].size;
+
+        // Something new appears on disk, then the user presses r.
+        fs::write(tmp.0.join("a/f2"), vec![b'y'; 3_000]).unwrap();
+        app.run_refresh();
+
+        let f2 = find_child(&app.tree, app.cur, "f2");
+        assert!(app.tree.path_of(f2).ends_with("f2"));
+        assert!(app.tree.nodes[app.cur].size >= dir_before + own_size(&tmp.0.join("a/f2")));
+        // The root sees exactly the difference of the refreshed subtree.
+        assert_eq!(
+            app.tree.nodes[0].size,
+            root_before - dir_before + app.tree.nodes[app.cur].size
+        );
     }
 }

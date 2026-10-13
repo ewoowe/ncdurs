@@ -1,12 +1,13 @@
 /* ncdurs - drawing code (ratatui), comparable to src/browser.c
  *
  * Two screens share the same four-row frame (status bar, path bar, content,
- * summary line): the scan progress screen shown while the tree is built, and
- * the browse screen.
+ * footer): the scan progress screen shown while the tree is built, and the
+ * browse screen. The footer shows, in order of priority, the delete
+ * confirmation, a transient notice, or the totals.
  */
 
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{List, ListItem, Paragraph};
 use ratatui::Frame;
@@ -18,7 +19,7 @@ use crate::{NAME, VERSION};
 const BAR_WIDTH: usize = 10;
 
 const KEYS_HINT: &str =
-    "↑/↓ move  →/Enter enter  ←/u back  s sort  d order  a size  q quit";
+    "↑/↓ move  →/Enter enter  ←/u back  n/s/C sort  a size  d del  r refresh  b shell  q quit";
 
 fn frame_layout(f: &mut Frame) -> std::rc::Rc<[Rect]> {
     Layout::default()
@@ -67,6 +68,26 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+    // Priority: delete confirmation > transient notice > totals.
+    if let Some(idx) = app.confirm {
+        let text = format!(
+            "Really delete \"{}\"?  y = yes, any other key = cancel",
+            app.tree.path_of(idx)
+        );
+        let style = Style::default().add_modifier(Modifier::REVERSED);
+        f.render_widget(Paragraph::new(text).style(style), area);
+        return;
+    }
+    if let Some((msg, is_err)) = &app.notice {
+        let style = if *is_err {
+            Style::default().fg(Color::Red)
+        } else {
+            Style::default()
+        };
+        f.render_widget(Paragraph::new(msg.as_str()).style(style), area);
+        return;
+    }
+
     let node = app.cur_node();
     let text = format!(
         "Disk usage: {}   Apparent size: {}   Items: {}   Sort: {} {}",
@@ -85,7 +106,11 @@ pub fn draw_scan(f: &mut Frame, scanner: &Scanner) {
     let chunks = frame_layout(f);
     let progress = scanner.progress();
 
-    draw_status(f, chunks[0], &format!("{NAME} {VERSION} ~ Scanning... press q to abort"));
+    draw_status(
+        f,
+        chunks[0],
+        &format!("{NAME} {VERSION} ~ Scanning... press q to abort"),
+    );
     draw_path(f, chunks[1], &progress.root);
     draw_progress(f, chunks[2], &progress);
     draw_scan_footer(f, chunks[3], &progress);

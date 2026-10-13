@@ -296,6 +296,15 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect, cols: usize) {
     let width = bar_size(cols);
     // The mtime column needs `-e` and is toggled with 'm' (browser.c:546).
     let show_mtime = app.scan_options.extended && app.show_mtime;
+    let show_items = app.show_items;
+    let graph = app.graph;
+    // The percentage is relative to the open directory, the bar to the largest
+    // entry - two different bases, exactly like the C version.
+    let dir_total = if app.show_as {
+        app.cur_node().asize
+    } else {
+        app.cur_node().size
+    };
     let colors = app.colors;
 
     let mut items: Vec<ListItem> = Vec::with_capacity(app.row_count());
@@ -307,6 +316,8 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect, cols: usize) {
             cols,
             width,
             show_mtime,
+            show_items,
+            graph,
             parent_mtime,
             &colors,
         )));
@@ -322,6 +333,9 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect, cols: usize) {
             row == app.selected,
             app.show_as,
             show_mtime,
+            show_items,
+            graph,
+            dir_total,
             &colors,
         )));
     }
@@ -343,6 +357,8 @@ fn parent_row_line(
     cols: usize,
     width: usize,
     show_mtime: bool,
+    show_items: bool,
+    graph: u8,
     parent_mtime: Option<i64>,
     c: &Colors,
 ) -> Line<'static> {
@@ -352,8 +368,15 @@ fn parent_row_line(
     // flag(2) + size(10) + graph(width+3) + [mtime(27)] + prefix(1); the C
     // version shows the parent entry as "/.." because it carries FF_DIR, and
     // borrows the mtime of the directory it points at (browser.c:234).
+    let graph_cols = match graph {
+        0 => 0,
+        1 => width + 3,
+        2 => 9,
+        _ => width + 10,
+    };
+    let items_cols = if show_items { 7 } else { 0 };
     let mtime_cols = if show_mtime { 27 } else { 0 };
-    let pad = 2 + 10 + width + 3;
+    let pad = 2 + 10 + graph_cols + items_cols;
     let mut spans = vec![Span::styled(" ".repeat(pad), base)];
     if show_mtime {
         spans.push(Span::styled(mtime_text(parent_mtime), base));
@@ -366,6 +389,30 @@ fn parent_row_line(
         spans.push(Span::styled(" ".repeat(cols - used), base));
     }
     Line::from(spans)
+}
+
+/// The percentage column (browse_draw_graph): `%5.1f` plus '%', relative to
+/// the size of the directory being listed, with 1 as the smallest divisor.
+fn percent(size: u64, dir_total: u64) -> String {
+    let denom = if dir_total == 0 { 1 } else { dir_total };
+    format!("{:5.1}%", (size as f32 / denom as f32) * 100.0)
+}
+
+/// browse_draw_items() (browser.c:197-223): six columns of content inside a
+/// seven column field. Counts below 100k use the locale's thousands
+/// separators, then k/M suffixes, and anything past a billion is clamped.
+fn items_text(items: u64) -> String {
+    if items == 0 {
+        " ".repeat(6)
+    } else if items < 100 * 1000 {
+        format!("{:>6}", fullsize(items))
+    } else if items < 1000 * 1000 {
+        format!("{:5.1}k", items as f32 / 1000.0)
+    } else if items < 1000 * 1000 * 1000 {
+        format!("{:5.1}M", items as f32 / 1e6)
+    } else {
+        "  > 1B".to_string()
+    }
 }
 
 /// browse_draw_mtime() formatting: 26 columns wide, right aligned, "no mtime"
@@ -388,6 +435,9 @@ fn row_line(
     selected: bool,
     show_as: bool,
     show_mtime: bool,
+    show_items: bool,
+    graph: u8,
+    dir_total: u64,
     c: &Colors,
 ) -> Line<'static> {
     let base = if selected { c.sel } else { c.default };
@@ -397,11 +447,16 @@ fn row_line(
     let dir = if selected { c.dir_sel } else { c.dir };
 
     let size = if show_as { n.asize } else { n.size };
-    // flag(2) + size(10) + graph(width+3) + [mtime(27)] + prefix(1). The C
-    // version also has an items column between graph and mtime, but it is off
-    // by default (0 columns wide) - same as here.
+    // flag(2) + size(10) + graph + [items(7)] + [mtime(27)] + prefix(1)
+    let graph_cols = match graph {
+        0 => 0,              // nothing at all
+        1 => width + 3,      // "[" bar "]" and a space
+        2 => 9,              // "[" %5.1f "%" "]" and a space
+        _ => width + 10,     // "[" %5.1f "%" " " bar "]" and a space
+    };
+    let items_cols = if show_items { 7 } else { 0 };
     let mtime_cols = if show_mtime { 27 } else { 0 };
-    let used = 2 + 10 + (width + 3) + mtime_cols + 1;
+    let used = 2 + 10 + graph_cols + items_cols + mtime_cols + 1;
     let room = cols.saturating_sub(used);
     let name_style = if n.is_dir { dir } else { base };
 
@@ -411,10 +466,27 @@ fn row_line(
     ];
     spans.extend(printsize_spans(size, num, base));
     spans.push(Span::styled(" ", base));
-    spans.push(Span::styled("[", base));
-    spans.push(Span::styled(graph_bar(size, total, width), bar));
-    spans.push(Span::styled("]", base));
-    spans.push(Span::styled(" ", base));
+    if graph != 0 {
+        spans.push(Span::styled("[", base));
+        if graph >= 2 {
+            // The percentage is relative to the directory total, unlike the
+            // bar which uses the largest entry (browse_draw_graph()).
+            spans.push(Span::styled(percent(size, dir_total), num));
+            if graph == 3 {
+                spans.push(Span::styled(" ", base));
+            }
+        }
+        if graph != 2 {
+            spans.push(Span::styled(graph_bar(size, total, width), bar));
+        }
+        spans.push(Span::styled("]", base));
+        spans.push(Span::styled(" ", base));
+    }
+    if show_items {
+        // browse_draw_items() (browser.c:197-223): 7 columns, 6 wide content.
+        spans.push(Span::styled(items_text(n.items), num));
+        spans.push(Span::styled(" ", base));
+    }
     if show_mtime {
         // browse_draw_mtime() (browser.c:226-247): 26 columns, right aligned,
         // NUM colour when there is a time and the row colour for "no mtime".

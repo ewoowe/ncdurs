@@ -20,6 +20,17 @@ use ratatui::widgets::ListState;
 use crate::scan::{Node, ScanOptions, Scanner, Tree};
 use crate::theme::{Colors, Theme};
 
+/// The display switches, all of which have a matching key. `graph` is the C
+/// version's 0..3 value: bit 0 draws the bar, bit 1 the percentage.
+#[derive(Clone, Copy)]
+pub struct DisplayOptions {
+    pub show_hidden: bool,
+    pub show_mtime: bool,
+    pub show_items: bool,
+    pub graph: u8,
+    pub sort_df: bool,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SortCol {
     Size,
@@ -55,6 +66,13 @@ pub struct App {
     /// Show hidden and excluded entries (the `e` key, `--show-hidden`).
     /// Hiding only affects the listing, never the directory sizes.
     pub show_hidden: bool,
+    /// Show the item-count column (the `c` key).
+    pub show_items: bool,
+    /// The C version's `graph`: 0 = neither, 1 = bar, 2 = percentage,
+    /// 3 = both (the `g` key cycles it).
+    pub graph: u8,
+    /// Directories before files when sorting (the `t` key).
+    pub sort_df: bool,
     pub quit: bool,
     /// The tree was loaded from an export file: it does not describe the
     /// filesystem, so delete, refresh and the shell are disabled (same
@@ -102,6 +120,9 @@ impl App {
             show_as,
             show_mtime: false,
             show_hidden: true,
+            show_items: false,
+            graph: 1,
+            sort_df: false,
             quit: false,
             imported,
             colors: theme.colors(),
@@ -158,7 +179,20 @@ impl App {
             .filter(|&i| show_hidden || !is_hidden(tree, i))
             .collect();
 
+        let sort_df = self.sort_df;
         view.sort_by(|&a, &b| {
+            // "Directories first" is decided before the descending-order flip,
+            // exactly like the C version returns early (dirlist.c:68-73).
+            if sort_df {
+                let (da, db) = (tree.nodes[a].is_dir, tree.nodes[b].is_dir);
+                if da != db {
+                    return if da {
+                        Ordering::Less
+                    } else {
+                        Ordering::Greater
+                    };
+                }
+            }
             let ord = cmp_entries(
                 &tree.nodes[a],
                 &tree.nodes[b],
@@ -242,12 +276,13 @@ impl App {
 
     /// Applies the display switches from the command line. The list is rebuilt
     /// because `new()` has already sorted it with the defaults.
-    pub fn set_display(&mut self, show_hidden: bool, show_mtime: bool) {
-        self.show_hidden = show_hidden;
-        self.show_mtime = show_mtime;
-        if !show_hidden {
-            self.resort();
-        }
+    pub fn set_display(&mut self, opts: DisplayOptions) {
+        self.show_hidden = opts.show_hidden;
+        self.show_mtime = opts.show_mtime;
+        self.show_items = opts.show_items;
+        self.graph = opts.graph;
+        self.sort_df = opts.sort_df;
+        self.resort();
     }
 
     /// Selecting the active column again reverses the sort order.
@@ -428,7 +463,7 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => self.move_by(1),
             KeyCode::PageUp => self.move_by(-(self.view_height.max(1) as i64)),
             KeyCode::PageDown => self.move_by(self.view_height.max(1) as i64),
-            KeyCode::Home | KeyCode::Char('g') => self.selected = 0,
+            KeyCode::Home => self.selected = 0,
             KeyCode::End | KeyCode::Char('G') => {
                 self.selected = self.row_count().saturating_sub(1)
             }
@@ -453,6 +488,14 @@ impl App {
                 self.show_hidden = !self.show_hidden;
                 self.resort();
             }
+            KeyCode::Char('c') => self.show_items = !self.show_items,
+            // 't' puts directories before files (browser.c:485).
+            KeyCode::Char('t') => {
+                self.sort_df = !self.sort_df;
+                self.resort();
+            }
+            // 'g' cycles graph 0..3 (browser.c:538).
+            KeyCode::Char('g') => self.graph = (self.graph + 1) % 4,
             KeyCode::Char('a') => {
                 self.show_as = !self.show_as;
                 self.resort();

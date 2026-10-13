@@ -31,7 +31,7 @@ use ratatui::crossterm::terminal::{
 };
 use ratatui::Terminal;
 
-use app::App;
+use app::{App, DisplayOptions};
 use scan::{ScanOptions, Scanner, Tree};
 use theme::Theme;
 
@@ -70,6 +70,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut extended = false;
     let mut show_hidden = true;
     let mut show_mtime = false;
+    let mut show_items = false;
+    let mut graph: u8 = 1;
     let mut export: Option<PathBuf> = None;
     let mut import: Option<PathBuf> = None;
 
@@ -105,6 +107,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "--hide-hidden" => show_hidden = false,
             "--show-mtime" => show_mtime = true,
             "--hide-mtime" => show_mtime = false,
+            "--show-itemcount" => show_items = true,
+            "--hide-itemcount" => show_items = false,
+            // The C version keeps the graph in a 0..3 value: bit 0 is the bar,
+            // bit 1 the percentage.
+            "--show-graph" => graph |= 1,
+            "--hide-graph" => graph &= !1,
+            "--show-percent" => graph |= 2,
+            "--hide-percent" => graph &= !2,
             "--si" => ui::set_si(true),
             "--no-si" => ui::set_si(false),
             "--color" => {
@@ -132,6 +142,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // The display switches are also valid for `-f` (browsing an import file),
+    // so they are collected before either mode runs. "Directories first" has
+    // no command line switch in the C version either - only the 't' key.
+    let display = DisplayOptions {
+        show_hidden,
+        show_mtime,
+        show_items,
+        graph,
+        sort_df: false,
+    };
+
     // Mode 1: load an export file ("-" = stdin), optionally re-exporting it
     // instead of browsing.
     if let Some(file) = &import {
@@ -147,7 +168,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err("browsing an import needs a terminal".into());
         }
         let mut terminal = setup_terminal()?;
-        let outcome = run_browse(&mut terminal, tree, show_as, theme, show_hidden, show_mtime);
+        let outcome = run_browse(&mut terminal, tree, show_as, theme, display);
         restore_terminal(&mut terminal)?;
         if let Some(note) = outcome? {
             eprintln!("{}", note);
@@ -163,6 +184,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         exclude_caches,
         extended,
     };
+
 
     // Validate before entering the terminal, so errors stay readable.
     let md = fs::symlink_metadata(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
@@ -199,8 +221,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         export.as_deref(),
         theme,
         options,
-        show_hidden,
-        show_mtime,
+        display,
     );
     restore_terminal(&mut terminal)?;
 
@@ -273,11 +294,10 @@ fn run_browse(
     tree: Tree,
     show_as: bool,
     theme: Theme,
-    show_hidden: bool,
-    show_mtime: bool,
+    display: DisplayOptions,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     let mut app = App::new(tree, show_as, true, theme);
-    app.set_display(show_hidden, show_mtime);
+    app.set_display(display);
     browse_loop(terminal, &mut app)?;
     Ok(None)
 }
@@ -290,8 +310,7 @@ fn run_tui(
     export: Option<&Path>,
     theme: Theme,
     options: ScanOptions,
-    show_hidden: bool,
-    show_mtime: bool,
+    display: DisplayOptions,
 ) -> Result<Outcome, Box<dyn std::error::Error>> {
     let mut scanner = Scanner::new(path, options.clone())?;
     let mut aborted = false;
@@ -356,7 +375,7 @@ fn run_tui(
 
     let mut app = App::new(tree, show_as, false, theme);
     app.scan_options = options;
-    app.set_display(show_hidden, show_mtime);
+    app.set_display(display);
     browse_loop(terminal, &mut app)?;
     Ok(Outcome {
         note: warning,
@@ -538,6 +557,12 @@ Options:
       --hide-hidden        Hide dotfiles, backup files and excluded entries
       --show-mtime         Show the modification time column (needs -e)
       --hide-mtime         Hide the modification time column (default)
+      --show-itemcount     Show the number of contained items (default: off)
+      --hide-itemcount     Hide the item count column
+      --show-graph         Show the bar graph (default)
+      --hide-graph         Hide the bar graph
+      --show-percent       Show the percentage (default: off)
+      --hide-percent       Hide the percentage
       --color SCHEME    Colour scheme: auto (default), off, dark, dark-bg
   -o, --export FILE     Scan and write the result as JSON to FILE (use - for stdout)
   -f, --import FILE     Load a FILE created with -o and browse it (use - for stdin)

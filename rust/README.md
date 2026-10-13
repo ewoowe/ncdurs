@@ -10,7 +10,7 @@
 
 ## 构建与运行
 
-需要 Rust 1.85 或更高版本（crate 使用 edition 2024，开发环境为 1.96）。
+需要 Rust 1.88 或更高版本（crate 使用 edition 2024，并用到 edition 2024 稳定下来的 let-chains；开发环境为 1.96）。
 
 ```bash
 cd rust
@@ -259,6 +259,23 @@ bash scripts/compare.sh --skip-perf           # 跳过性能测量
 ```
 
 脚本会依次做：`du` 与两个版本的 disk usage 三方对照、apparent size 与 items 的两版对照、自动生成含硬链接/稀疏文件/符号链接/无权限目录的用例树再对照一次、与 C 版的双向导出/导入一致性检查（`ncdu -o` → `ncdurs -f` → 再导出、以及反向，比对根尺寸与条目数）、最后测量「扫描到浏览界面出现」的耗时（min/avg）。全部通过时退出码 0。
+
+### CI
+
+`.github/workflows/rust.yml`（GitHub Actions；Gitea/Forgejo Actions 读同一路径）跑三个 job：
+
+| job | 内容 |
+| --- | --- |
+| `test` | Linux / macOS / Windows 三平台矩阵：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、`cargo build --release` |
+| `interop` | Ubuntu：装 `libncurses-dev`，让 `compare.sh` 自行构建 C 版并在一个小目录上跑全部断言（`--skip-perf`，因为 runner 的计时噪声太大） |
+| `msrv` | 用 1.88.0（声明的最低版本）编译并跑测试，防止不知不觉用上新语法 |
+
+只在 `rust/**` 或工作流文件本身变化时触发，C 版的改动不会打扰它。本地等价的一条命令：
+
+```bash
+cd rust
+cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
+```
 
 ### 导出文件逐字节对照
 

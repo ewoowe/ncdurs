@@ -4,8 +4,8 @@
 
 代码位于本仓库的 `rust/` 子目录，与 C 版源码、Autotools 构建完全独立：`cargo` 只针对 `rust/`，C 版仍用 `./configure && make`，两者互不影响。
 
-> 当前状态：**P0 + 扫描体验 + 删除/刷新/开 shell + 导出/导入**。可以扫描目录（带进度页、可随时中止）、交互浏览、排序、切换大小口径、删除条目（带确认）、重扫当前目录、在当前目录开 shell，以及与 C 版格式互通的导出/导入；数值与 C 版一致，扫描性能也与 C 版同一量级（见「性能对比」）。
-> 已通过与 C 版的自动化对比（`scripts/compare.sh`：数值、边界用例、性能、双向导出/导入）以及 15 个单元测试。
+> 当前状态：**P0 + 扫描体验 + 删除/刷新/开 shell + 导出/导入 + 界面与 C 版对齐 + 颜色主题**。可以扫描目录（带进度页、可随时中止）、交互浏览、排序、切换大小口径、删除条目（带确认）、重扫当前目录、在当前目录开 shell、与 C 版格式互通的导出/导入；界面（列布局、底栏、扫描页/消息/确认框的居中窗口、`..` 项、帮助页、`i` 信息框）与 C 版逐项对齐，并支持 `--color off|dark|dark-bg` 三套主题；数值与 C 版一致，扫描性能也与 C 版同一量级（见「性能对比」）。
+> 已通过与 C 版的自动化对比（`scripts/compare.sh`：数值、边界用例、性能、双向导出/导入）以及 18 个单元测试。
 > 删除、刷新、排除规则、导出/导入等功能尚未实现，见文末「待实现」。
 
 ## 构建与运行
@@ -34,6 +34,7 @@ ncdurs [OPTIONS] [PATH]
 -a, --apparent-size   显示表观大小（apparent size）而不是磁盘占用
 -o, --export FILE     扫描并把结果以 JSON 写入 FILE（- 表示标准输出）
 -f, --import FILE     读取用 -o 生成的文件并浏览（- 表示标准输入）
+    --color SCHEME    颜色主题：auto（默认）/ off / dark / dark-bg
 -h, --help            显示帮助
 -V, --version         显示版本
 ```
@@ -75,7 +76,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 
 ## 与原版 ncdu（C 版 1.22）的对比
 
-下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 15 项、部分实现 4 项、未实现 40 项。
+下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 20 项、部分实现 4 项、未实现 35 项。
 
 ### 数值一致性
 
@@ -137,7 +138,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `--enable-delete` / `--disable-delete` | 未实现 | 无删除功能 |
 | `--enable-refresh` / `--disable-refresh` | 未实现 | 无刷新功能 |
 | `-r` / `-rr`（只读） | 未实现 | 当前没有任何破坏性操作 |
-| `--si` / `--no-si` | 未实现 | 固定二进制单位（KiB / MiB / ...） |
+| `--si` / `--no-si` | 已实现 | 十进制（kB/MB）与二进制（KiB/MiB）单位切换 |
 | `-a, --apparent-size` / `--disk-usage` | 部分 | 默认即磁盘占用，有 `-a`；没有 `--disk-usage` 显式开关 |
 | `--show-hidden` / `--hide-hidden` | 未实现 | |
 | `--show-itemcount` / `--hide-itemcount` | 未实现 | 无 itemcount 列（汇总在底栏） |
@@ -150,7 +151,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `--group-directories-first` / `--no-group-directories-first` | 未实现 | |
 | `--confirm-quit` / `--no-confirm-quit` | 未实现 | 退出无二次确认 |
 | `--confirm-delete` / `--no-confirm-delete` | 未实现 | 无删除功能 |
-| `--color off\|dark\|dark-bg` | 未实现 | 只有选中行反色高亮 |
+| `--color off\|dark\|dark-bg` | 已实现 | 三套主题逐槽照抄 `src/util.h` 的 `UI_COLORS`；另加原版没有的 `auto` 并作为默认（`NO_COLOR` 已设置、或 `TERM` 为空 / `dumb` 时回退 `off`，否则用 `dark`） |
 
 ### 界面按键
 
@@ -171,7 +172,8 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `r` | 重算当前目录 | 已实现（重扫后替换该目录的子树） |
 | `b` | 在当前目录开 shell | 已实现（`NCDU_SHELL` → `$SHELL` → `/bin/sh`，经 shell 解析，可带参数） |
 | `d` | 删除选中项 | 已实现（先弹 `y`/`n` 确认；目录按递归删除） |
-| `?` | 帮助页 | 未实现 |
+| `i` | 显示选中项信息 | 已实现（`Name`/`Path`/`Type`/`Disk usage`/`Apparent size`，再按 `i` 关闭） |
+| `?` | 帮助页 | 已实现（三页 `1:Keys` / `2:Format` / `3:About`，方向键与 PgUp / PgDn 滚动） |
 | `q` | 退出 | 已实现（另有 `Esc` / `Ctrl-C`） |
 | `q`（扫描期间） | 中止扫描 | 已实现 |
 
@@ -186,7 +188,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | 环境变量 `NCDU_SHELL`、`NCDU_LEVEL` | 支持 | 已实现（`b` 使用；`NCDU_LEVEL` 每次会话递增一次） |
 | 导出 / 导入 JSON | 支持 | 未实现 |
 | 显示列（图 / 百分比 / itemcount / mtime） | 可自由开关 | 固定：大小 + 图形 + 百分比 |
-| 颜色主题 | 3 种（off / dark / dark-bg） | 未实现 |
+| 颜色主题 | 3 种（off / dark / dark-bg） | 已实现（`--color`，默认 `auto`：终端支持彩色就用 `dark`，否则回退 `off`；数值/目录/图形/标记各按其色槽着色） |
 | 跨平台 | Linux / macOS / *BSD（不支持 Windows） | Linux / macOS / *BSD / Windows（Windows 尚未真机验证） |
 
 ### 性能对比
@@ -267,6 +269,50 @@ diff <(norm /tmp/c.json) <(norm /tmp/r.json) && echo '逐字节一致'
 
 除硬链接条目外应当无差异；硬链接的原因见「硬链接记账方式的差异」。另一个坑：**别用刚创建的文件做这种对照** —— `dd` 写完的文件 `st_blocks` 可能稍后才稳定，两版读到的会是不同时刻的快照。
 
+### 界面渲染的验证
+
+界面细节（列位置、颜色、底色范围、图形条格数）用下面两种方法核对，都不依赖人眼盯着屏幕：
+
+**1. 渲染像素级断言（`TestBackend`）** —— 适合"某个位置应该是什么"的确定性检查：
+
+```rust
+use ratatui::backend::TestBackend;
+let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
+terminal.draw(|f| draw(f, &mut app)).unwrap();
+let buffer = terminal.backend().buffer();
+// 状态行铺到最后一列了吗？图形条的那一行满格了吗？
+assert_eq!(buffer.cell((79, 0)).unwrap().style().bg, app.colors.hd.bg);
+```
+
+`src/ui.rs` 里现有两个这样的测试：**状态行与底栏的每一列是否都带标头底色**（对应 C 版的 `mvhline` 清整行）、**最大条目那一行的图形条是否全满**（对应按 `dirlist_maxs` 缩放）。它们都是改动前必然失败的回归保护。
+
+**2. 同尺寸抓两版首帧后精确计数** —— 适合与 C 版对照"格数、字符数"这类量：
+
+```bash
+cd /media/wangcheng/WorkSpace/VSCode/ncdu-official/ncdu
+for v in ./ncdu ./rust/target/release/ncdurs; do
+  { sleep 1.7; printf 'q'; sleep 0.3; } | timeout 9 env TERM=xterm-256color script -qefc \
+    "stty rows 28 cols 110; $v /some/dir" /dev/null > /tmp/$(basename "$v").raw
+done
+python3 -c "
+import re
+for name in ['/tmp/ncdu.raw', '/tmp/ncdurs.raw']:
+    t = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', open(name, encoding='utf8', errors='replace').read())
+    for line in t.replace('\r', '\n').split('\n'):
+        if 'rust' in line and '[' in line:
+            m = re.search(r'\[(#*)( *)\]', line)
+            if m:
+                print(name, '# 数', len(m.group(1)), '空格数', len(m.group(2)))
+                break
+"
+```
+
+三个要点，都踩过：
+
+- **必须看首帧**：两边都是差分渲染，没变化的行（路径行、列表）不会重绘，流式输出里"看不到" —— 曾据此误判路径行只在子目录显示；
+- **给 C 版留点时间**：扫描完成后它的首帧可能还是 `No items to display`，列表稍后才填充；
+- **一定套 `timeout`**：帮助页、信息框这类窗口是**模态**的（`q` 只关闭窗口、不退出程序，与原版一致），脚本少发一次按键就会一直挂着。
+
 交叉编译检查（只做类型检查，不需要目标平台链接器）：
 
 ```bash
@@ -284,14 +330,15 @@ cargo check --target x86_64-pc-windows-msvc
 - 删除与刷新只在内存树里「摘链 / 替换子树」，被移除的旧节点留在 arena 中成为不可达垃圾（不回收），反复大量操作会让内存缓慢增长；
 - 删除是直接 `unlink` / 递归 `rmdir`，没有回收站语义，确认后立即生效；
 - 硬链接的记账方式与 C 版不同（跨目录分摊、`H` 标记、导出文件里的逐条大小），详见「硬链接记账方式的差异」；
-- 图形列固定 10 格宽，不随终端宽度自适应；无颜色主题。
+- 颜色输出与 C 版**逐字节一致**：颜色写成经典 8 色 SGR（`33`/`46`/`42`…）而不是 crossterm 默认的 256 色语法（`38;5;3`）—— 见 `src/backend.rs`。这一点很重要：256 色表的前 16 项**是否**映射到终端自己的调色板由终端决定，某些主题会按固定色表渲染 `38;5;3`，于是 dark 主题看起来与原版不同；用经典色码则始终跟随终端配色；
+- 界面已按原版对齐（列布局、底栏、扫描页/消息/确认框的居中窗口、`..` 项、帮助页、信息框），但有几个标记还画不出来：`<`（被排除项）、`>`（其它文件系统）、`^`（Linux 伪文件系统）、`F`（firmlink）需要对应的扫描选项，`H`（硬链接已计过）需要硬链接记账，详见「硬链接记账方式的差异」。
 
 待实现（按优先级）：
 
 1. `--exclude PATTERN`、`-x`（不跨文件系统）、`--exclude-caches`；
 2. 扩展信息（`-e`：uid/gid/mtime）与按 mtime 排序；
-3. 排序补齐：自然序（natsort，C 版默认开启）、目录优先；
-4. 颜色主题（`--color off|dark|dark-bg`）、帮助页（`?`）、SI 单位（`--si`）；
+3. 排序补齐：目录优先（`t`）与 `--enable-natsort` 开关（自然序本身已按 C 版实现）；
+4. 显示项补齐：`--show-*` 五组列开关（图形/百分比/itemcount/mtime）、`--graph-style`（half-block / eighth-block）、目录优先（`t`）；
 5. Windows 硬链接去重、Windows 隐藏/系统属性过滤；
 6. （可选）内核调用优化：用 `openat`/`fstatat` 或 libc 直调替代 std 的 `statx`；
 7. （可选）arena 垃圾回收（compact），回收删除/刷新留下的不可达节点；

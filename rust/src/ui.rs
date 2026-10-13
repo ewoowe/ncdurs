@@ -121,6 +121,10 @@ fn cropstr(s: &str, width: usize) -> String {
 fn flag_char(n: &Node) -> char {
     if n.error {
         '!'
+    } else if n.excluded {
+        '<'
+    } else if n.othfs {
+        '>'
     } else if n.notreg {
         '@'
     } else if n.is_dir && n.children.is_empty() {

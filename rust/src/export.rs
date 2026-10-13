@@ -53,13 +53,23 @@ fn write_item<W: Write>(tree: &Tree, idx: usize, out: &mut W) -> io::Result<()> 
     write_escaped(out, tree.name(idx))?;
     out.write_all(b"\"")?;
 
-    // Zero sizes are omitted, like the C writer does for excluded or
-    // failed-to-stat items.
-    if own_asize > 0 {
-        write!(out, ",\"asize\":{own_asize}")?;
-    }
-    if own_size > 0 {
-        write!(out, ",\"dsize\":{own_size}")?;
+    // An excluded item carries no sizes at all, only the reason - that is how
+    // the C writer marks them: {"name":".git","excluded":"pattern"}.
+    if node.excluded {
+        if node.othfs {
+            out.write_all(b",\"excluded\":\"othfs\"")?;
+        } else {
+            out.write_all(b",\"excluded\":\"pattern\"")?;
+        }
+    } else {
+        // Zero sizes are omitted, like the C writer does for items that could
+        // not be stat'ed.
+        if own_asize > 0 {
+            write!(out, ",\"asize\":{own_asize}")?;
+        }
+        if own_size > 0 {
+            write!(out, ",\"dsize\":{own_size}")?;
+        }
     }
     if node.error {
         out.write_all(b",\"read_error\":true")?;
@@ -86,6 +96,11 @@ fn own_sizes(tree: &Tree, idx: usize) -> (u64, u64) {
     let mut child_size = 0u64;
     let mut child_asize = 0u64;
     for &child in &node.children {
+        // Excluded children never reached their parent's totals, so they must
+        // not be subtracted from them here either.
+        if tree.nodes[child].excluded {
+            continue;
+        }
         child_size += tree.nodes[child].size;
         child_asize += tree.nodes[child].asize;
     }

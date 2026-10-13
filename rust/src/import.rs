@@ -103,6 +103,7 @@ fn parse_item(
     let mut hlnkc = false;
     let mut read_error = false;
     let mut notreg = false;
+    let mut excluded = false;
 
     p.skip_ws();
     p.expect(b'{')?;
@@ -137,8 +138,12 @@ fn parse_item(
             }
             "read_error" => read_error = p.boolean()?,
             "notreg" => notreg = p.boolean()?,
-            // Fields we do not model (excluded) plus the extended information
-            // (-e: uid/gid/mode/mtime) are skipped.
+            // The reason an item was left out: "pattern", "othfs" or "kernfs".
+            "excluded" => {
+                let _reason = p.parse_string()?;
+                excluded = true;
+            }
+            // Extended information (-e: uid/gid/mode/mtime) is skipped for now.
             _ => p.skip_value()?,
         }
     }
@@ -151,6 +156,7 @@ fn parse_item(
     let idx = tree.push_node(parent, &name, is_dir);
     tree.nodes[idx].error = read_error;
     tree.nodes[idx].notreg = notreg;
+    tree.nodes[idx].excluded = excluded;
 
     if !is_dir {
         tree.nodes[idx].size = own_size;

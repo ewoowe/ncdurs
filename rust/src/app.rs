@@ -17,7 +17,7 @@ use std::path::Path;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::ListState;
 
-use crate::scan::{Node, Scanner, Tree};
+use crate::scan::{Node, ScanOptions, Scanner, Tree};
 use crate::theme::{Colors, Theme};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -55,6 +55,9 @@ pub struct App {
     pub imported: bool,
     /// Resolved colours of the active theme (`--color`).
     pub colors: Colors,
+    /// The options the tree was scanned with; `r` (refresh) reuses them so that
+    /// exclusions and `-x` stay in effect.
+    pub scan_options: ScanOptions,
     /// Height of the list area, updated while drawing.
     pub view_height: usize,
     pub list_state: ListState,
@@ -93,6 +96,7 @@ impl App {
             quit: false,
             imported,
             colors: theme.colors(),
+            scan_options: ScanOptions::default(),
             view_height: 10,
             list_state: ListState::default(),
             confirm: None,
@@ -277,7 +281,7 @@ impl App {
     /// Re-scans the open directory and grafts the result into the tree.
     pub fn run_refresh(&mut self) {
         let path = self.cur_path();
-        let mut scanner = match Scanner::new(Path::new(&path)) {
+        let mut scanner = match Scanner::new(Path::new(&path), self.scan_options.clone()) {
             Ok(s) => s,
             Err(e) => {
                 self.notice = Some((format!("refresh failed: {path}: {e}"), true));

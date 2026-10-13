@@ -7,6 +7,7 @@
 
 mod app;
 mod backend;
+mod exclude;
 mod export;
 mod import;
 mod platform;
@@ -31,7 +32,7 @@ use ratatui::crossterm::terminal::{
 use ratatui::Terminal;
 
 use app::App;
-use scan::{Scanner, Tree};
+use scan::{ScanOptions, Scanner, Tree};
 use theme::Theme;
 
 pub const NAME: &str = env!("CARGO_PKG_NAME");
@@ -60,6 +61,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut path: Option<PathBuf> = None;
     let mut show_as = false;
     let mut theme = Theme::default();
+    let mut excludes = exclude::Excludes::default();
+    let mut one_file_system = false;
+    let mut exclude_caches = false;
     let mut export: Option<PathBuf> = None;
     let mut import: Option<PathBuf> = None;
 
@@ -75,6 +79,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
             "-a" | "--apparent-size" => show_as = true,
+            "--exclude" => {
+                let pattern = args.next().ok_or("--exclude requires a pattern")?;
+                excludes.add(&pattern);
+            }
+            "-X" | "--exclude-from" => {
+                let file = args.next().ok_or("-X requires a file name")?;
+                excludes
+                    .add_file(&file)
+                    .map_err(|e| format!("{file}: {e}"))?;
+            }
+            "-x" | "--one-file-system" => one_file_system = true,
+            "--cross-file-system" => one_file_system = false,
+            "--exclude-caches" => exclude_caches = true,
+            "--include-caches" => exclude_caches = false,
             "--si" => ui::set_si(true),
             "--no-si" => ui::set_si(false),
             "--color" => {
@@ -127,6 +145,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Mode 2: scan a directory, optionally exporting instead of browsing.
     let path = path.unwrap_or_else(|| PathBuf::from("."));
+    let options = ScanOptions {
+        excludes,
+        one_file_system,
+        exclude_caches,
+    };
 
     // Validate before entering the terminal, so errors stay readable.
     let md = fs::symlink_metadata(&path).map_err(|e| format!("{}: {}", path.display(), e))?;
@@ -138,7 +161,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // a file) scan without the progress screen, so it works from scripts.
     if let Some(file) = export.as_deref() {
         if !io::stdout().is_terminal() {
-            let (tree, warning) = scan_plain(&path)?;
+            let (tree, warning) = scan_plain(&path, &options)?;
             let entries = tree.nodes.len();
             if file == Path::new("-") {
                 let mut out = io::stdout().lock();
@@ -156,7 +179,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut terminal = setup_terminal()?;
-    let outcome = run_tui(&mut terminal, &path, show_as, export.as_deref(), theme);
+    let outcome = run_tui(
+        &mut terminal,
+        &path,
+        show_as,
+        export.as_deref(),
+        theme,
+        options,
+    );
     restore_terminal(&mut terminal)?;
 
     // Anything the user should see is printed after the terminal is restored.
@@ -173,8 +203,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Scans without any terminal interaction (used when stdout is redirected).
-fn scan_plain(path: &Path) -> Result<(Tree, Option<String>), Box<dyn std::error::Error>> {
-    let mut scanner = Scanner::new(path)?;
+fn scan_plain(
+    path: &Path,
+    options: &ScanOptions,
+) -> Result<(Tree, Option<String>), Box<dyn std::error::Error>> {
+    let mut scanner = Scanner::new(path, options.clone())?;
     while !scanner.step(SCAN_BATCH) {}
     if let Some(err) = scanner.failure().map(|e| e.to_string()) {
         scanner.abort();
@@ -238,8 +271,9 @@ fn run_tui(
     show_as: bool,
     export: Option<&Path>,
     theme: Theme,
+    options: ScanOptions,
 ) -> Result<Outcome, Box<dyn std::error::Error>> {
-    let mut scanner = Scanner::new(path)?;
+    let mut scanner = Scanner::new(path, options.clone())?;
     let mut aborted = false;
     let mut last_draw: Option<Instant> = None;
 
@@ -301,6 +335,7 @@ fn run_tui(
     }
 
     let mut app = App::new(tree, show_as, false, theme);
+    app.scan_options = options;
     browse_loop(terminal, &mut app)?;
     Ok(Outcome {
         note: warning,
@@ -472,6 +507,10 @@ Usage: {name} [OPTIONS] [PATH]
 Options:
   -a, --apparent-size   Show apparent size instead of disk usage
       --si / --no-si    Use decimal (kB/MB) instead of binary (KiB/MiB) units
+      --exclude PATTERN Leave matching files out of the statistics (repeatable)
+  -X, --exclude-from FILE  Read exclude patterns from FILE, one per line
+  -x, --one-file-system    Do not cross filesystem boundaries
+      --exclude-caches     Skip directories that hold a CACHEDIR.TAG
       --color SCHEME    Colour scheme: auto (default), off, dark, dark-bg
   -o, --export FILE     Scan and write the result as JSON to FILE (use - for stdout)
   -f, --import FILE     Load a FILE created with -o and browse it (use - for stdin)

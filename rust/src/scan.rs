@@ -20,6 +20,8 @@
  * finishes, aborts or fails.
  */
 
+use crate::exclude::{self, Excludes};
+
 use std::collections::{HashSet, VecDeque};
 use std::env;
 use std::fs;
@@ -58,6 +60,11 @@ pub struct Node {
     /// Neither a directory nor a regular file (symlink, socket, fifo, device).
     /// The C version records this as `notreg` in its exports.
     pub notreg: bool,
+    /// Left out of the statistics by an --exclude pattern or by
+    /// --exclude-caches; the C version marks these with '<'.
+    pub excluded: bool,
+    /// On another filesystem, so it was not entered (`-x`); marked '>'.
+    pub othfs: bool,
 }
 
 pub struct Tree {
@@ -93,6 +100,8 @@ impl Tree {
             is_dir,
             error: false,
             notreg: false,
+            excluded: false,
+            othfs: false,
         });
         self.attach(parent, idx);
         idx
@@ -248,6 +257,16 @@ pub struct Progress {
     pub bytes: u64,
 }
 
+/// What the scanner should leave out (`--exclude`, `-x`, `--exclude-caches`).
+#[derive(Default, Clone)]
+pub struct ScanOptions {
+    pub excludes: Excludes,
+    /// `-x`: do not cross filesystem boundaries.
+    pub one_file_system: bool,
+    /// `--exclude-caches`: skip directories holding a CACHEDIR.TAG.
+    pub exclude_caches: bool,
+}
+
 struct Frame {
     /// Index of the directory node in the tree.
     node: usize,
@@ -257,6 +276,10 @@ struct Frame {
     size: u64,
     asize: u64,
     items: u64,
+    /// This directory sits inside an excluded subtree, so its totals must not
+    /// reach the ancestors - the contents are still scanned so that they can be
+    /// browsed, they just do not count (`--exclude`).
+    excluded: bool,
 }
 
 enum Action {
@@ -273,6 +296,10 @@ pub struct Scanner {
     bytes: u64,
     /// Working directory at the time the scanner was created.
     start_cwd: PathBuf,
+    /// Exclusion rules and `-x`.
+    options: ScanOptions,
+    /// Device of the scanned root, for `-x`.
+    root_dev: Option<u64>,
     done: bool,
     failed: Option<String>,
 }
@@ -280,7 +307,7 @@ pub struct Scanner {
 impl Scanner {
     /// Prepares a scan of `path`. The current working directory is changed to
     /// `path`; it is restored by `into_result()` or `abort()`.
-    pub fn new(path: &Path) -> io::Result<Scanner> {
+    pub fn new(path: &Path, options: ScanOptions) -> io::Result<Scanner> {
         let md = fs::symlink_metadata(path)?;
         if !md.is_dir() {
             return Err(io::Error::new(
@@ -310,6 +337,8 @@ impl Scanner {
             },
             bytes: 0,
             start_cwd,
+            options,
+            root_dev: platform::file_id(&md).map(|(dev, _)| dev),
             done: false,
             failed: None,
         };
@@ -328,6 +357,8 @@ impl Scanner {
             is_dir: true,
             error: false,
             notreg: false,
+            excluded: false,
+            othfs: false,
         });
 
         let (names, list_failed) = scanner.read_names();
@@ -342,6 +373,7 @@ impl Scanner {
             size: 0,
             asize: 0,
             items: 0,
+            excluded: false,
         });
         Ok(scanner)
     }
@@ -437,6 +469,8 @@ impl Scanner {
                     is_dir: false,
                     error: true,
                     notreg: false,
+                    excluded: false,
+                    othfs: false,
                 });
                 self.tree.attach(Some(parent), idx);
                 self.stats.entries += 1;
@@ -448,6 +482,41 @@ impl Scanner {
         // Symlinks are not followed: symlink_metadata() reports the link
         // itself, so a symlink to a directory is not entered.
         let is_dir = md.is_dir();
+
+        // Exclusion rules: --exclude matches the full path (the C version tries
+        // the whole path and every suffix of it), -x stops at filesystem
+        // boundaries, --exclude-caches skips cache directories. Everything
+        // below an excluded directory inherits that state.
+        let parent_excluded = self.stack.last().is_some_and(|f| f.excluded);
+        let mut excluded = parent_excluded;
+        let mut othfs = false;
+        let mut skip_contents = false;
+        if !parent_excluded {
+            if !self.options.excludes.is_empty() {
+                let full = format!(
+                    "{}/{}",
+                    self.tree.path_of(parent),
+                    self.tree.name_of(name_ref)
+                );
+                if self.options.excludes.matches(&full) {
+                    excluded = true;
+                    // The C version does not descend into an excluded
+                    // directory: its contents never show up in the listing.
+                    skip_contents = is_dir;
+                }
+            }
+            if is_dir && !excluded {
+                if self.options.one_file_system && self.on_other_filesystem(&md) {
+                    othfs = true;
+                    skip_contents = true;
+                } else if self.options.exclude_caches
+                    && exclude::has_cachedir_tag(Path::new(self.tree.name_of(name_ref)))
+                {
+                    excluded = true;
+                    skip_contents = true;
+                }
+            }
+        }
 
         // Count a file with multiple hard links only once. If the platform
         // cannot provide a stable file identity, no de-duplication is attempted.
@@ -473,13 +542,29 @@ impl Scanner {
             // Symlinks, sockets, fifos and device nodes: what the C version
             // records as "notreg" (neither a directory nor a regular file).
             notreg: !is_dir && !md.is_file(),
+            excluded: false,
+            othfs: false,
         });
         self.tree.attach(Some(parent), idx);
         self.stats.entries += 1;
         self.bytes += own_size;
+        {
+            let n = &mut self.tree.nodes[idx];
+            n.excluded = excluded;
+            n.othfs = othfs;
+        }
 
         if !is_dir {
-            self.add_to_parent(own_size, own_asize, 1);
+            // Excluded files stay visible but are left out of the statistics.
+            if !excluded {
+                self.add_to_parent(own_size, own_asize, 1);
+            }
+            return;
+        }
+
+        // Not ours to scan (other filesystem, cache directory): keep the entry
+        // but skip its contents.
+        if skip_contents {
             return;
         }
 
@@ -491,7 +576,9 @@ impl Scanner {
         if !entered {
             self.tree.nodes[idx].error = true;
             self.stats.errors += 1;
-            self.add_to_parent(own_size, own_asize, 1);
+            if !excluded {
+                self.add_to_parent(own_size, own_asize, 1);
+            }
             return;
         }
 
@@ -508,6 +595,7 @@ impl Scanner {
                     size: 0,
                     asize: 0,
                     items: 0,
+                    excluded,
                 });
             }
             (None, _) => {
@@ -549,7 +637,10 @@ impl Scanner {
 
         if is_root {
             self.finish();
-        } else {
+        } else if !frame.excluded {
+            // An excluded subtree keeps its own totals (so it can be browsed)
+            // but must not reach the ancestors: that is what "excluded from the
+            // statistics" means in the C version.
             self.add_to_parent(size, asize, frame.items + 1);
         }
     }
@@ -561,6 +652,14 @@ impl Scanner {
             frame.size += size;
             frame.asize += asize;
             frame.items += items;
+        }
+    }
+
+    /// True when `md` lives on another filesystem than the scan root (`-x`).
+    fn on_other_filesystem(&self, md: &fs::Metadata) -> bool {
+        match (self.root_dev, platform::file_id(md)) {
+            (Some(root), Some((dev, _))) => dev != root,
+            _ => false,
         }
     }
 
@@ -598,7 +697,7 @@ impl Scanner {
 /// Scans a whole tree in one go; used by the tests.
 #[cfg(test)]
 pub fn scan(path: &Path) -> io::Result<(Tree, ScanStats)> {
-    let mut scanner = Scanner::new(path)?;
+    let mut scanner = Scanner::new(path, ScanOptions::default())?;
     while !scanner.step(4096) {}
     if let Some(err) = scanner.failure() {
         return Err(io::Error::other(err.to_string()));
@@ -741,7 +840,7 @@ mod tests {
         let (bulk, bulk_stats) = scan(&tmp.0).unwrap();
 
         // One entry per step: the result has to be identical, names included.
-        let mut scanner = Scanner::new(&tmp.0).unwrap();
+        let mut scanner = Scanner::new(&tmp.0, ScanOptions::default()).unwrap();
         while !scanner.step(1) {}
         let (stepped, stepped_stats) = scanner.into_result();
 
@@ -764,7 +863,7 @@ mod tests {
 
         let before = env::current_dir().unwrap();
 
-        let mut scanner = Scanner::new(&tmp.0).unwrap();
+        let mut scanner = Scanner::new(&tmp.0, ScanOptions::default()).unwrap();
         scanner.step(1);
         scanner.abort();
         assert_eq!(env::current_dir().unwrap(), before);
@@ -863,6 +962,37 @@ mod tests {
             app.tree.nodes[0].size,
             root_before - dir_before + app.tree.nodes[app.cur].size
         );
+    }
+
+    #[test]
+    fn excludes_are_left_out_of_the_statistics() {
+        let _guard = lock();
+        let tmp = TempDir::new("excl");
+        fs::create_dir(tmp.0.join("keep")).unwrap();
+        fs::create_dir(tmp.0.join(".git")).unwrap();
+        fs::write(tmp.0.join("keep/f"), vec![b'x'; 4_000]).unwrap();
+        fs::write(tmp.0.join(".git/big"), vec![b'y'; 8_000]).unwrap();
+
+        let (plain, _) = scan(&tmp.0).unwrap();
+        let size_with = plain.nodes[0].size;
+        let items_with = plain.nodes[0].items;
+        let git_plain = find_child(&plain, 0, ".git");
+        assert_eq!(plain.nodes[git_plain].children.len(), 1);
+
+        let mut options = ScanOptions::default();
+        options.excludes.add(".git");
+        let mut scanner = Scanner::new(&tmp.0, options).unwrap();
+        while !scanner.step(usize::MAX) {}
+        let (tree, _) = scanner.into_result();
+
+        // The excluded directory is still listed, but it neither counts nor
+        // gets its contents scanned - same as the C version.
+        let git = find_child(&tree, 0, ".git");
+        assert!(tree.nodes[git].excluded);
+        assert!(tree.nodes[git].children.is_empty());
+        assert!(tree.nodes[0].size < size_with, "size must shrink");
+        assert!(tree.nodes[0].items < items_with, "items must shrink");
+        assert_eq!(tree.nodes[git].size, own_size(&tmp.0.join(".git")));
     }
 
     #[cfg(unix)]

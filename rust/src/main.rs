@@ -48,6 +48,9 @@ const SCAN_UI_INTERVAL: Duration = Duration::from_millis(200);
 const BROWSE_POLL: Duration = Duration::from_millis(200);
 
 fn main() -> ExitCode {
+    // The C version enables the locale early on; the thousands separator in
+    // the info window depends on it.
+    platform::init_locale();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
@@ -64,6 +67,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut excludes = exclude::Excludes::default();
     let mut one_file_system = false;
     let mut exclude_caches = false;
+    let mut extended = false;
+    let mut show_hidden = true;
+    let mut show_mtime = false;
     let mut export: Option<PathBuf> = None;
     let mut import: Option<PathBuf> = None;
 
@@ -93,6 +99,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "--cross-file-system" => one_file_system = false,
             "--exclude-caches" => exclude_caches = true,
             "--include-caches" => exclude_caches = false,
+            "-e" | "--extended" => extended = true,
+            "--no-extended" => extended = false,
+            "--show-hidden" => show_hidden = true,
+            "--hide-hidden" => show_hidden = false,
+            "--show-mtime" => show_mtime = true,
+            "--hide-mtime" => show_mtime = false,
             "--si" => ui::set_si(true),
             "--no-si" => ui::set_si(false),
             "--color" => {
@@ -135,7 +147,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err("browsing an import needs a terminal".into());
         }
         let mut terminal = setup_terminal()?;
-        let outcome = run_browse(&mut terminal, tree, show_as, theme);
+        let outcome = run_browse(&mut terminal, tree, show_as, theme, show_hidden, show_mtime);
         restore_terminal(&mut terminal)?;
         if let Some(note) = outcome? {
             eprintln!("{}", note);
@@ -149,6 +161,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         excludes,
         one_file_system,
         exclude_caches,
+        extended,
     };
 
     // Validate before entering the terminal, so errors stay readable.
@@ -186,6 +199,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         export.as_deref(),
         theme,
         options,
+        show_hidden,
+        show_mtime,
     );
     restore_terminal(&mut terminal)?;
 
@@ -258,8 +273,11 @@ fn run_browse(
     tree: Tree,
     show_as: bool,
     theme: Theme,
+    show_hidden: bool,
+    show_mtime: bool,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
     let mut app = App::new(tree, show_as, true, theme);
+    app.set_display(show_hidden, show_mtime);
     browse_loop(terminal, &mut app)?;
     Ok(None)
 }
@@ -272,6 +290,8 @@ fn run_tui(
     export: Option<&Path>,
     theme: Theme,
     options: ScanOptions,
+    show_hidden: bool,
+    show_mtime: bool,
 ) -> Result<Outcome, Box<dyn std::error::Error>> {
     let mut scanner = Scanner::new(path, options.clone())?;
     let mut aborted = false;
@@ -336,6 +356,7 @@ fn run_tui(
 
     let mut app = App::new(tree, show_as, false, theme);
     app.scan_options = options;
+    app.set_display(show_hidden, show_mtime);
     browse_loop(terminal, &mut app)?;
     Ok(Outcome {
         note: warning,
@@ -511,6 +532,12 @@ Options:
   -X, --exclude-from FILE  Read exclude patterns from FILE, one per line
   -x, --one-file-system    Do not cross filesystem boundaries
       --exclude-caches     Skip directories that hold a CACHEDIR.TAG
+  -e, --extended           Collect uid/gid/mode/mtime (enables the mtime
+                           column with 'm' and sorting by it with 'M')
+      --show-hidden        Show hidden and excluded entries (default, 'e' key)
+      --hide-hidden        Hide dotfiles, backup files and excluded entries
+      --show-mtime         Show the modification time column (needs -e)
+      --hide-mtime         Hide the modification time column (default)
       --color SCHEME    Colour scheme: auto (default), off, dark, dark-bg
   -o, --export FILE     Scan and write the result as JSON to FILE (use - for stdout)
   -f, --import FILE     Load a FILE created with -o and browse it (use - for stdin)

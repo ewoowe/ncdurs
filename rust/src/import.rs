@@ -104,6 +104,9 @@ fn parse_item(
     let mut read_error = false;
     let mut notreg = false;
     let mut excluded = false;
+    // The `-e` fields; has_ext is set as soon as one of them shows up.
+    let mut ext = crate::platform::ExtInfo::default();
+    let mut has_ext = false;
 
     p.skip_ws();
     p.expect(b'{')?;
@@ -143,7 +146,23 @@ fn parse_item(
                 let _reason = p.parse_string()?;
                 excluded = true;
             }
-            // Extended information (-e: uid/gid/mode/mtime) is skipped for now.
+            "uid" => {
+                ext.uid = p.u64()? as u32;
+                has_ext = true;
+            }
+            "gid" => {
+                ext.gid = p.u64()? as u32;
+                has_ext = true;
+            }
+            "mode" => {
+                ext.mode = p.u64()? as u32;
+                has_ext = true;
+            }
+            "mtime" => {
+                ext.mtime = p.number()? as i64;
+                has_ext = true;
+            }
+            // Anything else we do not model (yet) is skipped.
             _ => p.skip_value()?,
         }
     }
@@ -157,6 +176,8 @@ fn parse_item(
     tree.nodes[idx].error = read_error;
     tree.nodes[idx].notreg = notreg;
     tree.nodes[idx].excluded = excluded;
+    tree.nodes[idx].ext = ext;
+    tree.nodes[idx].has_ext = has_ext;
 
     if !is_dir {
         tree.nodes[idx].size = own_size;
@@ -262,6 +283,33 @@ impl Parser<'_> {
             return Err(self.err("expected an integer"));
         }
         Ok(value)
+    }
+
+    /// Reads a number: an integer, or a fractional one. The C version writes
+    /// mtime as an integer, but exports from older releases carry a fraction,
+    /// so both have to be accepted here.
+    fn number(&mut self) -> Result<f64, String> {
+        self.skip_ws();
+        let start = self.pos;
+        if matches!(self.peek(), Some(b'-' | b'+')) {
+            self.pos += 1;
+        }
+        while self.peek().is_some_and(|b| b.is_ascii_digit()) {
+            self.pos += 1;
+        }
+        if self.peek() == Some(b'.') {
+            self.pos += 1;
+            while self.peek().is_some_and(|b| b.is_ascii_digit()) {
+                self.pos += 1;
+            }
+        }
+        if self.pos == start {
+            return Err(self.err("expected a number"));
+        }
+        std::str::from_utf8(&self.buf[start..self.pos])
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .ok_or_else(|| self.err("invalid number"))
     }
 
     fn boolean(&mut self) -> Result<bool, String> {
@@ -501,11 +549,16 @@ mod tests {
         assert_eq!(tree.nodes[0].size, 10 + 0);
         assert_eq!(tree.nodes[0].children.len(), 1);
         assert_eq!(tree.nodes[1].asize, 7);
-        // `notreg` is understood (and is not an error); `excluded`, uid and
-        // mtime are skipped for now.
+        // `notreg`, `excluded` and the `-e` fields are understood; `excluded`
+        // itself still only means "leave it out of the statistics".
         assert!(tree.nodes[0].notreg);
         assert!(!tree.nodes[0].error);
         assert!(!tree.nodes[1].notreg);
+        assert!(tree.nodes[0].excluded);
+        assert!(tree.nodes[0].has_ext);
+        assert_eq!(tree.nodes[0].ext.uid, 0);
+        assert_eq!(tree.nodes[0].ext.mtime, 1); // "mtime":1.5 is truncated
+        assert!(!tree.nodes[1].has_ext);
     }
 
     #[test]

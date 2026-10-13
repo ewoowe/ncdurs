@@ -8,3 +8,8 @@ ratatui = { version = "0.30.2", features = ["crossterm"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
+# Only used for localtime_r()/strftime(), so the mtime column prints exactly
+# what the C version prints.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -71,6 +71,14 @@ fn write_item<W: Write>(tree: &Tree, idx: usize, out: &mut W) -> io::Result<()> 
             write!(out, ",\"dsize\":{own_size}")?;
         }
     }
+    // The `-e` fields, in the same order as the C writer puts them.
+    if node.has_ext {
+        write!(
+            out,
+            ",\"uid\":{},\"gid\":{},\"mode\":{},\"mtime\":{}",
+            node.ext.uid, node.ext.gid, node.ext.mode, node.ext.mtime
+        )?;
+    }
     if node.error {
         out.write_all(b",\"read_error\":true")?;
     }

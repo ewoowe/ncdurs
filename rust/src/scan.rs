@@ -21,6 +21,7 @@
  */
 
 use crate::exclude::{self, Excludes};
+use crate::platform::ExtInfo;
 
 use std::collections::{HashSet, VecDeque};
 use std::env;
@@ -65,6 +66,10 @@ pub struct Node {
     pub excluded: bool,
     /// On another filesystem, so it was not entered (`-x`); marked '>'.
     pub othfs: bool,
+    /// Extended information (`-e`). Zeroed when `has_ext` is false.
+    pub ext: ExtInfo,
+    /// Whether `ext` holds real data (the C version's FF_EXT flag).
+    pub has_ext: bool,
 }
 
 pub struct Tree {
@@ -102,6 +107,8 @@ impl Tree {
             notreg: false,
             excluded: false,
             othfs: false,
+            ext: ExtInfo::default(),
+            has_ext: false,
         });
         self.attach(parent, idx);
         idx
@@ -265,6 +272,8 @@ pub struct ScanOptions {
     pub one_file_system: bool,
     /// `--exclude-caches`: skip directories holding a CACHEDIR.TAG.
     pub exclude_caches: bool,
+    /// `-e`: collect uid/gid/mode/mtime for every entry.
+    pub extended: bool,
 }
 
 struct Frame {
@@ -322,6 +331,14 @@ impl Scanner {
             normalize(&env::current_dir()?.join(path))
         };
         let start_cwd = env::current_dir()?;
+        // The root goes through its own construction below, so collect its
+        // extended information here - before `options` is moved into the
+        // scanner.
+        let root_ext = if options.extended {
+            platform::ext_info(&md)
+        } else {
+            None
+        };
 
         // From here on the walk uses relative names.
         env::set_current_dir(&abs)
@@ -359,6 +376,8 @@ impl Scanner {
             notreg: false,
             excluded: false,
             othfs: false,
+            ext: root_ext.unwrap_or_default(),
+            has_ext: root_ext.is_some(),
         });
 
         let (names, list_failed) = scanner.read_names();
@@ -471,6 +490,8 @@ impl Scanner {
                     notreg: false,
                     excluded: false,
                     othfs: false,
+                    ext: ExtInfo::default(),
+                    has_ext: false,
                 });
                 self.tree.attach(Some(parent), idx);
                 self.stats.entries += 1;
@@ -482,6 +503,15 @@ impl Scanner {
         // Symlinks are not followed: symlink_metadata() reports the link
         // itself, so a symlink to a directory is not entered.
         let is_dir = md.is_dir();
+
+        // `-e`: collect uid/gid/mode/mtime. Only asked for when the option is
+        // given; the C version fills the same fields unconditionally but only
+        // keeps them in extended mode.
+        let ext = if self.options.extended {
+            platform::ext_info(&md)
+        } else {
+            None
+        };
 
         // Exclusion rules: --exclude matches the full path (the C version tries
         // the whole path and every suffix of it), -x stops at filesystem
@@ -544,6 +574,8 @@ impl Scanner {
             notreg: !is_dir && !md.is_file(),
             excluded: false,
             othfs: false,
+            ext: ext.unwrap_or_default(),
+            has_ext: ext.is_some(),
         });
         self.tree.attach(Some(parent), idx);
         self.stats.entries += 1;

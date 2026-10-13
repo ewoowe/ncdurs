@@ -294,14 +294,20 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect, cols: usize) {
         .max()
         .unwrap_or(0);
     let width = bar_size(cols);
+    // The mtime column needs `-e` and is toggled with 'm' (browser.c:546).
+    let show_mtime = app.scan_options.extended && app.show_mtime;
     let colors = app.colors;
 
     let mut items: Vec<ListItem> = Vec::with_capacity(app.row_count());
     if app.has_parent_row() {
+        // ".." borrows the mtime of the directory it points at.
+        let parent_mtime = app.cur_node().has_ext.then(|| app.cur_node().ext.mtime);
         items.push(ListItem::new(parent_row_line(
             app.selected == 0,
             cols,
             width,
+            show_mtime,
+            parent_mtime,
             &colors,
         )));
     }
@@ -315,6 +321,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect, cols: usize) {
             cols,
             row == app.selected,
             app.show_as,
+            show_mtime,
             &colors,
         )));
     }
@@ -331,22 +338,43 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect, cols: usize) {
 
 /// The ".." row (the C version's `dirlist_parent`): browse_draw_item() skips
 /// both the size and the graph for it, leaving just the name.
-fn parent_row_line(selected: bool, cols: usize, width: usize, c: &Colors) -> Line<'static> {
+fn parent_row_line(
+    selected: bool,
+    cols: usize,
+    width: usize,
+    show_mtime: bool,
+    parent_mtime: Option<i64>,
+    c: &Colors,
+) -> Line<'static> {
     let base = if selected { c.sel } else { c.default };
     let dir = if selected { c.dir_sel } else { c.dir };
 
-    // flag(2) + size(10) + graph(width+3) + prefix(1); the C version shows the
-    // parent entry as "/.." because it carries FF_DIR.
-    let pad = 2 + 10 + width + 3 + 1;
-    let mut spans = vec![
-        Span::styled(" ".repeat(pad), base),
-        Span::styled("/..", dir),
-    ];
-    let used = pad + 3;
+    // flag(2) + size(10) + graph(width+3) + [mtime(27)] + prefix(1); the C
+    // version shows the parent entry as "/.." because it carries FF_DIR, and
+    // borrows the mtime of the directory it points at (browser.c:234).
+    let mtime_cols = if show_mtime { 27 } else { 0 };
+    let pad = 2 + 10 + width + 3;
+    let mut spans = vec![Span::styled(" ".repeat(pad), base)];
+    if show_mtime {
+        spans.push(Span::styled(mtime_text(parent_mtime), base));
+        spans.push(Span::styled(" ", base));
+    }
+    spans.push(Span::styled("/..", dir));
+
+    let used = pad + mtime_cols + 3;
     if used < cols {
         spans.push(Span::styled(" ".repeat(cols - used), base));
     }
     Line::from(spans)
+}
+
+/// browse_draw_mtime() formatting: 26 columns wide, right aligned, "no mtime"
+/// when the information was not collected.
+fn mtime_text(mtime: Option<i64>) -> String {
+    match mtime {
+        Some(t) => format!("{:>26}", crate::platform::format_mtime(t)),
+        None => format!("{:>26}", "no mtime"),
+    }
 }
 
 /// browse_draw_item() (src/browser.c:250-281).
@@ -359,6 +387,7 @@ fn row_line(
     cols: usize,
     selected: bool,
     show_as: bool,
+    show_mtime: bool,
     c: &Colors,
 ) -> Line<'static> {
     let base = if selected { c.sel } else { c.default };
@@ -368,8 +397,11 @@ fn row_line(
     let dir = if selected { c.dir_sel } else { c.dir };
 
     let size = if show_as { n.asize } else { n.size };
-    // flag(2) + size(10) + graph(width+3) + prefix(1)
-    let used = 2 + 10 + (width + 3) + 1;
+    // flag(2) + size(10) + graph(width+3) + [mtime(27)] + prefix(1). The C
+    // version also has an items column between graph and mtime, but it is off
+    // by default (0 columns wide) - same as here.
+    let mtime_cols = if show_mtime { 27 } else { 0 };
+    let used = 2 + 10 + (width + 3) + mtime_cols + 1;
     let room = cols.saturating_sub(used);
     let name_style = if n.is_dir { dir } else { base };
 
@@ -383,6 +415,18 @@ fn row_line(
     spans.push(Span::styled(graph_bar(size, total, width), bar));
     spans.push(Span::styled("]", base));
     spans.push(Span::styled(" ", base));
+    if show_mtime {
+        // browse_draw_mtime() (browser.c:226-247): 26 columns, right aligned,
+        // NUM colour when there is a time and the row colour for "no mtime".
+        // The time itself uses NUM; "no mtime" keeps the row colour, exactly
+        // like the C version does with its goto.
+        let mtime_style = if n.has_ext { num } else { base };
+        spans.push(Span::styled(
+            mtime_text(n.has_ext.then_some(n.ext.mtime)),
+            mtime_style,
+        ));
+        spans.push(Span::styled(" ", base));
+    }
     spans.push(Span::styled(
         format!("{}{}", if n.is_dir { "/" } else { " " }, cropstr(name, room)),
         name_style,
@@ -622,10 +666,11 @@ pub fn draw_message(f: &mut Frame, text: &str, colors: &Colors) {
 /// fullsize() (src/util.c:109): decimal number with thousand separators.
 fn fullsize(n: u64) -> String {
     let s = n.to_string();
+    let sep = crate::platform::thousands_sep();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, c) in s.char_indices() {
         if i > 0 && (s.len() - i) % 3 == 0 {
-            out.push('.');
+            out.push(sep);
         }
         out.push(c);
     }
@@ -676,27 +721,82 @@ pub fn draw_info(f: &mut Frame, app: &App, colors: &Colors) {
         Line::from(Span::styled("Path:", bold)),
     );
 
-    let kind = if node.is_dir {
-        "Directory"
-    } else if node.notreg {
-        "Other"
+    if node.has_ext {
+        // browse_draw_info() (browser.c:57-85): in extended mode the type line
+        // becomes Mode/UID/GID and a "Last modified" line is added.
+        win_line(
+            f,
+            inner,
+            4,
+            9,
+            Line::from(Span::styled(
+                crate::platform::fmtmode(node.ext.mode),
+                colors.default,
+            )),
+        );
+        win_line(
+            f,
+            inner,
+            4,
+            26,
+            Line::from(Span::styled(
+                node.ext.uid.to_string(),
+                colors.default,
+            )),
+        );
+        win_line(
+            f,
+            inner,
+            4,
+            38,
+            Line::from(Span::styled(
+                node.ext.gid.to_string(),
+                colors.default,
+            )),
+        );
+        win_line(
+            f,
+            inner,
+            5,
+            18,
+            Line::from(Span::styled(
+                crate::platform::format_mtime(node.ext.mtime),
+                colors.default,
+            )),
+        );
+        win_line(f, inner, 4, 3, Line::from(Span::styled("Mode:", bold)));
+        win_line(f, inner, 4, 21, Line::from(Span::styled("UID:", bold)));
+        win_line(f, inner, 4, 33, Line::from(Span::styled("GID:", bold)));
+        win_line(
+            f,
+            inner,
+            5,
+            3,
+            Line::from(Span::styled("Last modified:", bold)),
+        );
     } else {
-        "File"
-    };
-    win_line(
-        f,
-        inner,
-        4,
-        9,
-        Line::from(Span::styled(kind, colors.default)),
-    );
-    win_line(
-        f,
-        inner,
-        4,
-        3,
-        Line::from(Span::styled("Type:", bold)),
-    );
+        let kind = if node.is_dir {
+            "Directory"
+        } else if node.notreg {
+            "Other"
+        } else {
+            "File"
+        };
+        win_line(
+            f,
+            inner,
+            4,
+            9,
+            Line::from(Span::styled(kind, colors.default)),
+        );
+        win_line(
+            f,
+            inner,
+            4,
+            3,
+            Line::from(Span::styled("Type:", bold)),
+        );
+    }
 
     for (row, bytes, label) in [
         (6u16, node.size, "   Disk usage:"),
@@ -973,6 +1073,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// With `-e` and the `m` toggle, the mtime column appears between the
+    /// graph and the name (browser.c:272-275). The fixture has no extended
+    /// data, so it shows the right-aligned "no mtime" placeholder.
+    #[test]
+    fn mtime_column_sits_between_graph_and_name() {
+        let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
+        let mut app = demo_app();
+        app.scan_options.extended = true;
+        app.show_mtime = true;
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+
+        let line = row_text_at(&terminal, 2, 80);
+        let bar_end = line.find(']').expect("a graph column");
+        let rest = &line[bar_end..];
+        let mtime = rest.find("no mtime").expect("the mtime placeholder");
+        let name = rest.find("big").expect("the entry name");
+        assert!(mtime < name, "mtime must precede the name: {line:?}");
     }
 
     /// The graph is scaled against the largest entry of the listing, so that

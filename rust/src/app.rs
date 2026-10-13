@@ -25,6 +25,8 @@ pub enum SortCol {
     Size,
     Name,
     Items,
+    /// Only reachable with `-e` (the `M` key).
+    Mtime,
 }
 
 
@@ -48,6 +50,11 @@ pub struct App {
     pub sort_desc: bool,
     /// Show apparent size instead of disk usage.
     pub show_as: bool,
+    /// Show the modification-time column; only usable with `-e` (`m` key).
+    pub show_mtime: bool,
+    /// Show hidden and excluded entries (the `e` key, `--show-hidden`).
+    /// Hiding only affects the listing, never the directory sizes.
+    pub show_hidden: bool,
     pub quit: bool,
     /// The tree was loaded from an export file: it does not describe the
     /// filesystem, so delete, refresh and the shell are disabled (same
@@ -93,6 +100,8 @@ impl App {
             sort_col: SortCol::Size,
             sort_desc: true,
             show_as,
+            show_mtime: false,
+            show_hidden: true,
             quit: false,
             imported,
             colors: theme.colors(),
@@ -133,11 +142,21 @@ impl App {
     /// active column first, then the remaining keys in a fixed order, using
     /// the natural-order name comparison from deps/strnatcmp.c.
     pub fn resort(&mut self) {
-        let mut view = self.tree.nodes[self.cur].children.clone();
         let tree = &self.tree;
         let col = self.sort_col;
         let desc = self.sort_desc;
         let show_as = self.show_as;
+        let show_hidden = self.show_hidden;
+
+        // dirlist.c:50-52: "hidden" means a dotfile, a backup file ("~") or an
+        // entry that was excluded. Filtering only affects the listing - the
+        // directory sizes still include everything.
+        let mut view: Vec<usize> = tree.nodes[self.cur]
+            .children
+            .iter()
+            .copied()
+            .filter(|&i| show_hidden || !is_hidden(tree, i))
+            .collect();
 
         view.sort_by(|&a, &b| {
             let ord = cmp_entries(
@@ -219,6 +238,16 @@ impl App {
             .position(|&i| i == leaving)
             .map(|i| i + usize::from(self.has_parent_row()))
             .unwrap_or(0);
+    }
+
+    /// Applies the display switches from the command line. The list is rebuilt
+    /// because `new()` has already sorted it with the defaults.
+    pub fn set_display(&mut self, show_hidden: bool, show_mtime: bool) {
+        self.show_hidden = show_hidden;
+        self.show_mtime = show_mtime;
+        if !show_hidden {
+            self.resort();
+        }
     }
 
     /// Selecting the active column again reverses the sort order.
@@ -408,6 +437,22 @@ impl App {
             KeyCode::Char('n') => self.set_sort(SortCol::Name),
             KeyCode::Char('s') => self.set_sort(SortCol::Size),
             KeyCode::Char('C') => self.set_sort(SortCol::Items),
+            // 'M' and 'm' only do something in extended mode, like in the C
+            // version (browser.c:475-549).
+            KeyCode::Char('M') => {
+                if self.scan_options.extended {
+                    self.set_sort(SortCol::Mtime);
+                }
+            }
+            KeyCode::Char('m') => {
+                if self.scan_options.extended {
+                    self.show_mtime = !self.show_mtime;
+                }
+            }
+            KeyCode::Char('e') => {
+                self.show_hidden = !self.show_hidden;
+                self.resort();
+            }
             KeyCode::Char('a') => {
                 self.show_as = !self.show_as;
                 self.resort();
@@ -440,6 +485,14 @@ impl App {
 
 /* --------------- sorting, mirroring src/dirlist.c + strnatcmp ----------- */
 
+/// ISHIDDEN() (src/dirlist.c:50): dotfiles, backup files and excluded entries.
+/// The ".." entry is never hidden, and in this implementation it is not part of
+/// `sorted` at all.
+fn is_hidden(tree: &Tree, idx: usize) -> bool {
+    let name = tree.name(idx);
+    tree.nodes[idx].excluded || name.starts_with('.') || name.ends_with('~')
+}
+
 /// dirlist_cmp() (src/dirlist.c:89-104): the active column first, then the
 /// remaining keys in a fixed order.
 ///
@@ -461,6 +514,12 @@ fn cmp_entries(a: &Node, b: &Node, an: &str, bn: &str, col: SortCol, show_as: bo
         SortCol::Size => size.then(asize).then(name).then(items),
         SortCol::Name => name.then(size).then(asize).then(items),
         SortCol::Items => items.then(size).then(asize).then(name),
+        // MTIME: mtime -> size -> name -> items (dirlist.c:55-104). Entries
+        // without extended information count as mtime 0, like cmp_mtime().
+        SortCol::Mtime => {
+            let mtime = a.ext.mtime.cmp(&b.ext.mtime);
+            mtime.then(a.size.cmp(&b.size)).then(name).then(items)
+        }
     }
 }
 

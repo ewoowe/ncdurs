@@ -73,6 +73,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut show_mtime = false;
     let mut show_items = false;
     let mut graph: u8 = 1;
+    let mut graph_style: u8 = 0;
     let mut sort_col = SortCol::Size;
     let mut sort_desc = true;
     let mut sort_df = false;
@@ -132,6 +133,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "--hide-graph" => graph &= !1,
             "--show-percent" => graph |= 2,
             "--hide-percent" => graph &= !2,
+            "--graph-style" => {
+                let value = args.next().ok_or("--graph-style requires a style")?;
+                graph_style = match value.as_str() {
+                    "hash" => 0,
+                    "half-block" => 1,
+                    // The C version accepts this misspelling too (main.c:231).
+                    "eighth-block" | "eigth-block" => 2,
+                    _ => {
+                        return Err(format!("Unknown --graph-style option: {value}.").into());
+                    }
+                };
+            }
             // Feature switches (src/main.c:194-222).
             "--enable-delete" => can_delete = true,
             "--disable-delete" => can_delete = false,
@@ -199,6 +212,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         show_mtime,
         show_items,
         graph,
+        graph_style,
         sort_df,
         sort_col,
         sort_desc,
@@ -671,6 +685,7 @@ Options:
       --hide-graph         Hide the bar graph
       --show-percent       Show the percentage (default: off)
       --hide-percent       Hide the percentage
+      --graph-style STYLE  hash (default) / half-block / eighth-block
       --sort COLUMN        Sort by disk-usage (default) / name / apparent-size /
                            itemcount / mtime, optionally with -asc or -desc
       --enable-natsort     Natural order when sorting by name (default)

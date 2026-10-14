@@ -141,7 +141,15 @@ fn flag_char(n: &Node) -> char {
 }
 
 /// browse_draw_graph() (src/browser.c:145), default "hash" style.
-fn graph_bar(size: u64, total: u64, width: usize) -> String {
+/// graph_styles[3][9] from src/browser.c:139: one character per eighth of a
+/// cell, indexed by the fraction the C version computes.
+const GRAPH_STYLES: [[char; 9]; 3] = [
+    [' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', '#'],
+    [' ', ' ', ' ', ' ', '▌', '▌', '▌', '▌', '█'],
+    [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'],
+];
+
+fn graph_bar(size: u64, total: u64, width: usize, style: u8) -> String {
     if total == 0 || size == 0 {
         return " ".repeat(width);
     }
@@ -158,7 +166,7 @@ fn graph_bar(size: u64, total: u64, width: usize) -> String {
     let mut bar = String::with_capacity(width);
     for _ in 0..width {
         let frac = ((num * 8) / perblock).clamp(0, 8);
-        bar.push(if frac == 8 { '#' } else { ' ' });
+        bar.push(GRAPH_STYLES[(style as usize).min(2)][frac as usize]);
         num -= perblock;
     }
     bar
@@ -301,6 +309,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect, cols: usize) {
     let show_mtime = app.scan_options.extended && app.show_mtime;
     let show_items = app.show_items;
     let graph = app.graph;
+    let graph_style = app.graph_style;
     // The percentage is relative to the open directory, the bar to the largest
     // entry - two different bases, exactly like the C version.
     let dir_total = if app.show_as {
@@ -338,6 +347,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect, cols: usize) {
             show_mtime,
             show_items,
             graph,
+            graph_style,
             dir_total,
             &colors,
         )));
@@ -441,6 +451,7 @@ fn row_line(
     show_mtime: bool,
     show_items: bool,
     graph: u8,
+    graph_style: u8,
     dir_total: u64,
     c: &Colors,
 ) -> Line<'static> {
@@ -481,7 +492,10 @@ fn row_line(
             }
         }
         if graph != 2 {
-            spans.push(Span::styled(graph_bar(size, total, width), bar));
+            spans.push(Span::styled(
+                graph_bar(size, total, width, graph_style),
+                bar,
+            ));
         }
         spans.push(Span::styled("]", base));
         spans.push(Span::styled(" ", base));

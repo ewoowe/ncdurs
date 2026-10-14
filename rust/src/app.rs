@@ -29,6 +29,8 @@ pub struct DisplayOptions {
     pub show_mtime: bool,
     pub show_items: bool,
     pub graph: u8,
+    /// `--graph-style`: 0 = hash, 1 = half-block, 2 = eighth-block.
+    pub graph_style: u8,
     pub sort_df: bool,
     /// Initial sort column and direction (`--sort`).
     pub sort_col: SortCol,
@@ -88,6 +90,8 @@ pub struct App {
     /// The C version's `graph`: 0 = neither, 1 = bar, 2 = percentage,
     /// 3 = both (the `g` key cycles it).
     pub graph: u8,
+    /// The C version's `graph_style`: 0 = hash, 1 = half-block, 2 = eighth.
+    pub graph_style: u8,
     /// Directories before files when sorting (the `t` key).
     pub sort_df: bool,
     pub quit: bool,
@@ -150,6 +154,7 @@ impl App {
             show_hidden: true,
             show_items: false,
             graph: 1,
+            graph_style: 0,
             sort_df: false,
             quit: false,
             imported,
@@ -319,6 +324,7 @@ impl App {
         self.show_mtime = opts.show_mtime;
         self.show_items = opts.show_items;
         self.graph = opts.graph;
+        self.graph_style = opts.graph_style;
         self.sort_df = opts.sort_df;
         self.natsort = opts.natsort;
         self.confirm_quit = opts.confirm_quit;

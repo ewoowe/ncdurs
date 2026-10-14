@@ -127,6 +127,8 @@ fn flag_char(n: &Node) -> char {
         '>'
     } else if n.notreg {
         '@'
+    } else if n.kernfs {
+        '^'
     } else if n.is_dir && n.children.is_empty() {
         'e'
     } else {

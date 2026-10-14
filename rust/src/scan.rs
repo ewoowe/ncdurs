@@ -66,6 +66,8 @@ pub struct Node {
     pub excluded: bool,
     /// On another filesystem, so it was not entered (`-x`); marked '>'.
     pub othfs: bool,
+    /// Linux pseudo filesystem excluded by `--exclude-kernfs`; marked '^'.
+    pub kernfs: bool,
     /// Extended information (`-e`). Zeroed when `has_ext` is false.
     pub ext: ExtInfo,
     /// Whether `ext` holds real data (the C version's FF_EXT flag).
@@ -107,6 +109,7 @@ impl Tree {
             notreg: false,
             excluded: false,
             othfs: false,
+            kernfs: false,
             ext: ExtInfo::default(),
             has_ext: false,
         });
@@ -275,6 +278,8 @@ pub struct ScanOptions {
     pub one_file_system: bool,
     /// `--exclude-caches`: skip directories holding a CACHEDIR.TAG.
     pub exclude_caches: bool,
+    /// `--exclude-kernfs`: skip Linux pseudo filesystems.
+    pub exclude_kernfs: bool,
     /// `-e`: collect uid/gid/mode/mtime for every entry.
     pub extended: bool,
 }
@@ -379,6 +384,7 @@ impl Scanner {
             notreg: false,
             excluded: false,
             othfs: false,
+            kernfs: false,
             ext: root_ext.unwrap_or_default(),
             has_ext: root_ext.is_some(),
         });
@@ -493,6 +499,7 @@ impl Scanner {
                     notreg: false,
                     excluded: false,
                     othfs: false,
+                    kernfs: false,
                     ext: ExtInfo::default(),
                     has_ext: false,
                 });
@@ -523,6 +530,7 @@ impl Scanner {
         let parent_excluded = self.stack.last().is_some_and(|f| f.excluded);
         let mut excluded = parent_excluded;
         let mut othfs = false;
+        let mut kernfs = false;
         let mut skip_contents = false;
         if !parent_excluded {
             if !self.options.excludes.is_empty() {
@@ -539,7 +547,13 @@ impl Scanner {
                 }
             }
             if is_dir && !excluded {
-                if self.options.one_file_system && self.on_other_filesystem(&md) {
+                if self.options.exclude_kernfs
+                    && platform::is_kernfs(Path::new(self.tree.name_of(name_ref)))
+                {
+                    // Keep the entry, skip the contents and mark it '^'.
+                    kernfs = true;
+                    skip_contents = true;
+                } else if self.options.one_file_system && self.on_other_filesystem(&md) {
                     othfs = true;
                     skip_contents = true;
                 } else if self.options.exclude_caches
@@ -577,6 +591,7 @@ impl Scanner {
             notreg: !is_dir && !md.is_file(),
             excluded: false,
             othfs: false,
+            kernfs: false,
             ext: ext.unwrap_or_default(),
             has_ext: ext.is_some(),
         });
@@ -587,6 +602,7 @@ impl Scanner {
             let n = &mut self.tree.nodes[idx];
             n.excluded = excluded;
             n.othfs = othfs;
+            n.kernfs = kernfs;
         }
 
         if !is_dir {

@@ -55,8 +55,10 @@ fn write_item<W: Write>(tree: &Tree, idx: usize, out: &mut W) -> io::Result<()> 
 
     // An excluded item carries no sizes at all, only the reason - that is how
     // the C writer marks them: {"name":".git","excluded":"pattern"}.
-    if node.excluded {
-        if node.othfs {
+    if node.excluded || node.kernfs {
+        if node.kernfs {
+            out.write_all(b",\"excluded\":\"kernfs\"")?;
+        } else if node.othfs {
             out.write_all(b",\"excluded\":\"othfs\"")?;
         } else {
             out.write_all(b",\"excluded\":\"pattern\"")?;

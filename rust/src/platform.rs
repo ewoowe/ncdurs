@@ -183,6 +183,43 @@ pub fn format_mtime(_mtime: i64) -> String {
     String::new()
 }
 
+/// True when the path lives on a Linux pseudo filesystem (`--exclude-kernfs`).
+/// The list of magic numbers is the one from ncdu.1: binfmt, bpf, cgroup,
+/// cgroup2, debug, devpts, proc, pstore, security, selinux, sys, trace.
+#[cfg(target_os = "linux")]
+pub fn is_kernfs(path: &Path) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let Ok(cpath) = CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let mut buf: libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statfs(cpath.as_ptr(), &mut buf) } != 0 {
+        return false;
+    }
+    matches!(
+        buf.f_type as u64,
+        0x9fa0        // proc
+            | 0x62656572  // sysfs
+            | 0x27e0eb    // cgroup
+            | 0x63677270  // cgroup2
+            | 0x64626720  // debugfs
+            | 0x1cd1      // devpts
+            | 0x42494e4d  // binfmtfs
+            | 0xcafe4a11  // bpf
+            | 0x6165676c  // pstore
+            | 0x73636673  // securityfs
+            | 0xf97cff8c  // selinuxfs
+            | 0x74726163 // tracefs
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn is_kernfs(_path: &Path) -> bool {
+    false
+}
+
 /// fmtmode(): the `drwxr-xr-x` string, with setuid/setgid/sticky shown as
 /// s/S/t/T like ls does.
 pub fn fmtmode(mode: u32) -> String {

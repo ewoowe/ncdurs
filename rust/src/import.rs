@@ -104,6 +104,7 @@ fn parse_item(
     let mut read_error = false;
     let mut notreg = false;
     let mut excluded = false;
+    let mut kernfs = false;
     // The `-e` fields; has_ext is set as soon as one of them shows up.
     let mut ext = crate::platform::ExtInfo::default();
     let mut has_ext = false;
@@ -143,8 +144,11 @@ fn parse_item(
             "notreg" => notreg = p.boolean()?,
             // The reason an item was left out: "pattern", "othfs" or "kernfs".
             "excluded" => {
-                let _reason = p.parse_string()?;
+                // "pattern", "othfs" or "kernfs"; the reason decides which flag
+                // the entry gets.
+                let reason = p.parse_string()?;
                 excluded = true;
+                kernfs = reason == "kernfs";
             }
             "uid" => {
                 ext.uid = p.u64()? as u32;
@@ -176,6 +180,7 @@ fn parse_item(
     tree.nodes[idx].error = read_error;
     tree.nodes[idx].notreg = notreg;
     tree.nodes[idx].excluded = excluded;
+    tree.nodes[idx].kernfs = kernfs;
     tree.nodes[idx].ext = ext;
     tree.nodes[idx].has_ext = has_ext;
 

@@ -81,7 +81,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 
 ## 与原版 ncdu（C 版 1.22）的对比
 
-下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 47 项、部分实现 4 项、未实现 8 项。
+下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 48 项、部分实现 4 项、未实现 7 项。
 
 ### 数值一致性
 
@@ -135,7 +135,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `--exclude PATTERN` / `-X, --exclude-from FILE` | 已实现 | 匹配整条路径与它的每个后缀（`fnmatch` 语义，`*` 跨 `/`）；命中的目录标 `<` 且不深入 |
 | `--exclude-caches` / `--include-caches` | 已实现 | 识别 `CACHEDIR.TAG` 的官方签名 |
 | `-L, --follow-symlinks` / `--no-follow-symlinks` | 未实现 | 行为等同原版默认（不跟随） |
-| `--exclude-kernfs` / `--include-kernfs` | 未实现 | |
+| `--exclude-kernfs` / `--include-kernfs` | 已实现 | Linux：用 `statfs` 的 `f_type` 比对 12 个伪文件系统 magic（proc/sys/cgroup/cgroup2/debug/devpts/binfmt/bpf/pstore/security/selinux/trace）；不入内、不计入、标 `^`，导出 `"excluded":"kernfs"`（实测与 C 版逐字段一致） |
 | `--exclude-firmlinks` / `--follow-firmlinks`（macOS） | 未实现 | |
 | `-0` / `-1` / `-2`（UI 级别） | 已实现 | `-0` 扫描期间完全不绘制（实测：默认输出 5161 字节 vs `-0` 的 36 字节）；`-1`/`-2` 都走全屏界面（原版的纯文本进度条未实现） |
 | `-q, --slow-ui-updates` / `--fast-ui-updates` | 已实现 | 刷新间隔 2 s ↔ 50 ms |
@@ -357,7 +357,7 @@ cargo check --target x86_64-pc-windows-msvc
 
 待实现（按优先级）：
 
-1. `--exclude-kernfs`（需要读挂载表判断 Linux 伪文件系统）；
+1. `--exclude-firmlinks`（macOS 专有，需要在 macOS 上验证）；
 2. `--graph-style`（half-block / eighth-block）与 `-L` / `--follow-symlinks`；
 3. 配置文件（`/etc/ncdu.conf`、`~/.config/ncdu/config`）与 `--ignore-config`；
 4. Windows 硬链接去重、Windows 隐藏/系统属性过滤；

@@ -81,7 +81,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 
 ## 与原版 ncdu（C 版 1.22）的对比
 
-下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 51 项、部分实现 4 项、未实现 4 项。
+下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 58 项、部分实现 0 项、未实现 1 项（仅剩 macOS 专有的 `--exclude-firmlinks`）。
 
 ### 数值一致性
 
@@ -126,7 +126,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | 选项（原版） | ncdurs | 备注 |
 | --- | --- | --- |
 | `-h, --help` | 已实现 | |
-| `-v, -V, --version` | 部分 | 有 `-V` / `--version`，无 `-v` |
+| `-v, -V, --version` | 已实现 | `-v` 与 `-V` / `--version` 是同义词（`main.c:434`） |
 | `-f FILE`（导入扫描结果） | 已实现 | 与 C 版 JSON 互通；`-` 表示 stdin；导入后禁用删除/刷新/shell |
 | `-o FILE`（导出为 JSON） | 已实现 | 与 C 版 JSON 互通；`-` 表示 stdout，重定向时不启界面 |
 | `-e, --extended, --no-extended` | 已实现 | 保存 uid/gid/mode/mtime，导出字段与 C 版逐字节一致；信息框改用 `Mode`/`UID`/`GID`/`Last modified` |
@@ -137,14 +137,14 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `-L, --follow-symlinks` / `--no-follow-symlinks` | 已实现 | 指向**文件**的链接按目标计数（且不再是 `@`）；指向**目录**的链接永不跟随 —— 与 C 版逐字节一致 |
 | `--exclude-kernfs` / `--include-kernfs` | 已实现 | Linux：用 `statfs` 的 `f_type` 比对 12 个伪文件系统 magic（proc/sys/cgroup/cgroup2/debug/devpts/binfmt/bpf/pstore/security/selinux/trace）；不入内、不计入、标 `^`，导出 `"excluded":"kernfs"`（实测与 C 版逐字段一致） |
 | `--exclude-firmlinks` / `--follow-firmlinks`（macOS） | 未实现 | |
-| `-0` / `-1` / `-2`（UI 级别） | 已实现 | `-0` 扫描期间完全不绘制（实测：默认输出 5161 字节 vs `-0` 的 36 字节）；`-1`/`-2` 都走全屏界面（原版的纯文本进度条未实现） |
+| `-0` / `-1` / `-2`（UI 级别） | 已实现 | `-0` 扫描期间完全不绘制（实测：默认输出 5161 字节 vs `-0` 的 36 字节）；`-1` 输出纯文本进度行到 **stderr**（路径 + 文件数 + 累计尺寸，`\r` 覆盖同一行，所以 stdout 仍是干净的 JSON），`-2` 走全屏界面 |
 | `-q, --slow-ui-updates` / `--fast-ui-updates` | 已实现 | 刷新间隔 2 s ↔ 50 ms |
 | `--enable-shell` / `--disable-shell` | 已实现 | 门控 `b` 键，禁用时弹 `Shell feature disabled.` |
 | `--enable-delete` / `--disable-delete` | 已实现 | 门控 `d` 键，禁用时弹 `Deletion feature disabled.` |
 | `--enable-refresh` / `--disable-refresh` | 已实现 | 门控 `r` 键，禁用时弹 `Directory refresh feature disabled.` |
 | `-r` / `-rr`（只读） | 已实现 | `-r` = `--disable-delete`；`-rr` 再加 `--disable-shell`（同手册）；导入的树本就只读 |
 | `--si` / `--no-si` | 已实现 | 十进制（kB/MB）与二进制（KiB/MiB）单位切换 |
-| `-a, --apparent-size` / `--disk-usage` | 部分 | 默认即磁盘占用，有 `-a`；没有 `--disk-usage` 显式开关 |
+| `-a, --apparent-size` / `--disk-usage` | 已实现 | 两个方向都有显式开关（默认磁盘占用） |
 | `--show-hidden` / `--hide-hidden` | 已实现 | 隐藏点文件、`~` 结尾的备份文件与被排除项（`e` 键同）；只影响列表，不影响尺寸 |
 | `--show-itemcount` / `--hide-itemcount` | 已实现 | 7 列宽的 itemcount 列，`c` 键同；格式照 `browse_draw_items`（千位分隔 / k / M / `> 1B`） |
 | `--show-mtime` / `--hide-mtime` | 已实现 | 依赖 `-e`；`m` 键同样可切换 |
@@ -379,12 +379,10 @@ cargo check --target x86_64-pc-windows-msvc
 待实现（按优先级）：
 
 1. `--exclude-firmlinks`（macOS 专有，需要在 macOS 上验证）；
-2. `-v`（小写版本快捷方式）与 `--disk-usage` 显式开关；
-3. 硬链接记账方式对齐 C 版（逐祖先链计数、导出保留每条链接的自身大小），见第 7 条；
-4. Windows 硬链接去重、Windows 隐藏/系统属性过滤；
-5. （可选）内核调用优化：用 `openat`/`fstatat` 或 libc 直调替代 std 的 `statx`；
-6. （可选）arena 垃圾回收（compact），回收删除/刷新留下的不可达节点；
-7. （可选）硬链接记账方式对齐 C 版（逐祖先链计数、`H` 标记、导出保留每条链接的自身大小），见「硬链接记账方式的差异」。
+2. Windows 硬链接去重、Windows 隐藏/系统属性过滤（CI 已有 Windows 真机可验证）；
+3. 硬链接记账方式对齐 C 版（逐祖先链计数、导出保留每条链接的自身大小），解锁 `H` 标记；
+4. （可选）内核调用优化：用 `openat`/`fstatat` 或 libc 直调替代 std 的 `statx`；
+5. （可选）arena 垃圾回收（compact），回收删除/刷新留下的不可达节点。
 
 ## 许可
 

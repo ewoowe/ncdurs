@@ -59,7 +59,9 @@ fn write_item<W: Write>(tree: &Tree, idx: usize, out: &mut W) -> io::Result<()> 
         if node.kernfs {
             out.write_all(b",\"excluded\":\"kernfs\"")?;
         } else if node.othfs {
-            out.write_all(b",\"excluded\":\"othfs\"")?;
+            // The C writer spells it "otherfs" (dir_export.c:133) - and its
+            // importer accepts both that and "othfs".
+            out.write_all(b",\"excluded\":\"otherfs\"")?;
         } else {
             out.write_all(b",\"excluded\":\"pattern\"")?;
         }

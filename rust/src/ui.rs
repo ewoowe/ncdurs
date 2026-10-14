@@ -119,16 +119,18 @@ fn cropstr(s: &str, width: usize) -> String {
 /// know about are produced; `<`, `>`, `^`, `F` need scan options and `H`
 /// needs hard link bookkeeping (see the README comparison table).
 fn flag_char(n: &Node) -> char {
-    if n.error {
-        '!'
-    } else if n.excluded {
+    // The order follows browse_draw_flag() (src/browser.c:120-134): '<' comes
+    // before '!', and '^' sits between '>' and '@'.
+    if n.excluded {
         '<'
+    } else if n.error {
+        '!'
     } else if n.othfs {
         '>'
-    } else if n.notreg {
-        '@'
     } else if n.kernfs {
         '^'
+    } else if n.notreg {
+        '@'
     } else if n.is_dir && n.children.is_empty() {
         'e'
     } else {

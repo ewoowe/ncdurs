@@ -570,7 +570,9 @@ impl Scanner {
         let dup = !is_dir
             && platform::nlink(&md) > 1
             && platform::file_id(&md).is_some_and(|id| !self.links.insert(id));
-        let (own_size, own_asize) = if dup {
+        // The C version keeps the sizes at zero for entries it does not scan
+        // (src/dir_scan.c:133: FF_OTHFS, FF_EXL and FF_KERNFS all skip it).
+        let (own_size, own_asize) = if dup || excluded || othfs || kernfs {
             (0, 0)
         } else {
             let name = self.tree.name_of(name_ref);

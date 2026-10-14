@@ -24,7 +24,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph};
 
 use crate::app::App;
-use crate::scan::{Node, Scanner};
+use crate::scan::{Node, Progress, Scanner};
 use crate::theme::Colors;
 use crate::{NAME, VERSION};
 
@@ -141,6 +141,24 @@ fn flag_char(n: &Node) -> char {
 }
 
 /// browse_draw_graph() (src/browser.c:145), default "hash" style.
+/// The plain text progress line of `-1` (dir_draw()'s `case 1` branch in
+/// src/dir_common.c): the path, the item count and - once a size is known -
+/// the running total, all on one line meant to be overwritten with '\r'. It is
+/// written to stderr, so `-1 -o -` keeps stdout clean for the JSON.
+pub fn progress_line(p: &Progress) -> String {
+    if p.bytes > 0 {
+        let (f, unit) = formatsize(p.bytes);
+        format!(
+            "{:<55} {:>8} files /{:>5.1} {unit}",
+            cropstr(&p.current, 55),
+            p.entries,
+            f
+        )
+    } else {
+        format!("{:<65} {:>8} files", cropstr(&p.current, 65), p.entries)
+    }
+}
+
 /// graph_styles[3][9] from src/browser.c:139: one character per eighth of a
 /// cell, indexed by the fraction the C version computes.
 const GRAPH_STYLES: [[char; 9]; 3] = [

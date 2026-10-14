@@ -303,7 +303,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(file) = export.as_deref()
         && !io::stdout().is_terminal()
     {
-        let (tree, warning) = scan_plain(&path, &options)?;
+        let (tree, warning) = scan_plain(&path, &options, ui_level)?;
         let entries = tree.nodes.len();
         if file == Path::new("-") {
             let mut out = io::stdout().lock();
@@ -489,9 +489,21 @@ fn parse_sort(
 fn scan_plain(
     path: &Path,
     options: &ScanOptions,
+    ui_level: u8,
 ) -> Result<(Tree, Option<String>), Box<dyn std::error::Error>> {
     let mut scanner = Scanner::new(path, options.clone())?;
-    while !scanner.step(SCAN_BATCH) {}
+    // -1: a plain progress line on stderr, overwritten in place with '\r'.
+    // stderr is deliberate - this path serves "-1 -o -", where stdout carries
+    // the JSON and must stay clean.
+    let plain_progress = ui_level == 1;
+    while !scanner.step(SCAN_BATCH) {
+        if plain_progress {
+            eprint!("\r{}", ui::progress_line(&scanner.progress()));
+        }
+    }
+    if plain_progress {
+        eprintln!();
+    }
     if let Some(err) = scanner.failure().map(|e| e.to_string()) {
         scanner.abort();
         return Err(format!("scan failed: {err}").into());

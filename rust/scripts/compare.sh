@@ -251,9 +251,9 @@ hl_items() {  # hl_items <bin> -> the f1/f2 entries as they appear in the export
 echo "  导出文件里同一 inode 的两个条目："
 echo "  C 版（每条链接都带自身大小 + hlnkc/ino）："
 hl_items "$C_BIN" | sed 's/^/    /'
-echo "  ncdurs（只保留被计入那条的大小）："
+echo "  ncdurs（每条链接同样带自身大小 + ino/hlnkc/nlink）："
 hl_items "$RUST_BIN" | sed 's/^/    /'
-echo "  以上差异为已知项、不计入 PASS/FAIL：根总量与条目数一致，只是记账方式不同。"
+echo "  两版在此完全一致：每条硬链接都保留自身大小与 ino/hlnkc/nlink，只有总量按一次计入（此前记录的「记账方式差异」已不存在）。"
 
 # ---------------------------------------------------------- 导出/导入互通
 

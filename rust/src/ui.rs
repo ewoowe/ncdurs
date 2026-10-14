@@ -188,6 +188,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(page) = app.help_page {
         draw_help(f, page, app.help_scroll, &app.colors);
     }
+    if app.quit_confirm {
+        draw_quit_confirm(f, &app.colors);
+    }
 }
 
 /// delete_draw_confirm() (src/delete.c:46): a 6x60 window with the question and
@@ -700,6 +703,18 @@ pub fn draw_scan(f: &mut Frame, scanner: &Scanner, colors: &Colors) {
             Span::styled("q", colors.key),
             Span::styled(" to abort", colors.default),
         ]),
+    );
+}
+
+/// quit_draw() (src/quit.c:41): a 4x30 window asking to confirm the quit.
+pub fn draw_quit_confirm(f: &mut Frame, colors: &Colors) {
+    let inner = window(f, 4, 30, "ncdu confirm quit", colors);
+    win_line(
+        f,
+        inner,
+        2,
+        2,
+        Line::from(Span::styled("Really quit? (y/N)", colors.default)),
     );
 }
 

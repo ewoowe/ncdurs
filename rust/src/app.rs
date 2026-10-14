@@ -20,8 +20,9 @@ use ratatui::widgets::ListState;
 use crate::scan::{Node, ScanOptions, Scanner, Tree};
 use crate::theme::{Colors, Theme};
 
-/// The display switches, all of which have a matching key. `graph` is the C
-/// version's 0..3 value: bit 0 draws the bar, bit 1 the percentage.
+/// The switches that come from the command line, most of which also have a
+/// matching key. `graph` is the C version's 0..3 value: bit 0 draws the bar,
+/// bit 1 the percentage.
 #[derive(Clone, Copy)]
 pub struct DisplayOptions {
     pub show_hidden: bool,
@@ -29,6 +30,23 @@ pub struct DisplayOptions {
     pub show_items: bool,
     pub graph: u8,
     pub sort_df: bool,
+    /// Initial sort column and direction (`--sort`).
+    pub sort_col: SortCol,
+    pub sort_desc: bool,
+    /// `--disable-natsort`.
+    pub natsort: bool,
+    /// Feature switches (`--enable-*`, `--disable-*`, `-r`).
+    pub can_delete: bool,
+    pub can_shell: bool,
+    pub can_refresh: bool,
+    /// `--confirm-quit` and `--no-confirm-delete`.
+    pub confirm_quit: bool,
+    pub delete_confirm: bool,
+    /// `-0` / `-1` / `-2`: how much feedback the scan gives.
+    pub ui_level: u8,
+    /// `-q` / `--slow-ui-updates`: refresh every 2 s instead of 10 times a
+    /// second.
+    pub slow_ui: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -103,6 +121,17 @@ pub struct App {
     pub help_scroll: usize,
     /// Show the "Item info" window (src/browser.c:39) for the selected entry.
     pub info: bool,
+    /// Features the C version lets you switch off (`--disable-*`, or `-r`).
+    /// A tree loaded with `-f` disables all three, like the C version does.
+    pub can_delete: bool,
+    pub can_shell: bool,
+    pub can_refresh: bool,
+    /// `--confirm-quit`: ask before quitting (src/quit.c).
+    pub confirm_quit: bool,
+    /// The quit confirmation is currently on screen.
+    pub quit_confirm: bool,
+    /// `--disable-natsort`: compare names byte-wise instead of naturally.
+    pub natsort: bool,
     /// Action for the main loop to execute.
     pub job: Option<Job>,
 }
@@ -136,6 +165,12 @@ impl App {
             help_page: None,
             help_scroll: 0,
             info: false,
+            can_delete: !imported,
+            can_shell: !imported,
+            can_refresh: !imported,
+            confirm_quit: false,
+            quit_confirm: false,
+            natsort: true,
             job: None,
         };
         app.resort();
@@ -179,6 +214,7 @@ impl App {
             .collect();
 
         let sort_df = self.sort_df;
+        let natsort = self.natsort;
         view.sort_by(|&a, &b| {
             // "Directories first" is decided before the descending-order flip,
             // exactly like the C version returns early (dirlist.c:68-73).
@@ -199,6 +235,7 @@ impl App {
                 tree.name(b),
                 col,
                 show_as,
+                natsort,
             );
             if desc { ord.reverse() } else { ord }
         });
@@ -283,6 +320,18 @@ impl App {
         self.show_items = opts.show_items;
         self.graph = opts.graph;
         self.sort_df = opts.sort_df;
+        self.natsort = opts.natsort;
+        self.confirm_quit = opts.confirm_quit;
+        self.delete_confirm = opts.delete_confirm;
+        // An imported tree stays read-only no matter what the command line
+        // asked for, like in the C version.
+        self.can_delete = opts.can_delete && !self.imported;
+        self.can_shell = opts.can_shell && !self.imported;
+        self.can_refresh = opts.can_refresh && !self.imported;
+        if self.sort_col != opts.sort_col || self.sort_desc != opts.sort_desc {
+            self.sort_col = opts.sort_col;
+            self.sort_desc = opts.sort_desc;
+        }
         self.resort();
     }
 
@@ -406,6 +455,15 @@ impl App {
             }
             return;
         }
+        // The quit confirmation: 'y' quits, anything else cancels
+        // (src/quit.c:34-38).
+        if self.quit_confirm {
+            self.quit_confirm = false;
+            if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+                self.quit = true;
+            }
+            return;
+        }
         // A "Message" window swallows any key (src/browser.c:371-375).
         if self.message.is_some() {
             self.message = None;
@@ -454,7 +512,15 @@ impl App {
             return;
         }
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
+            // 'q' asks for confirmation when --confirm-quit is on (src/quit.c).
+            KeyCode::Char('q') => {
+                if self.confirm_quit {
+                    self.quit_confirm = true;
+                } else {
+                    self.quit = true;
+                }
+            }
+            KeyCode::Esc => self.quit = true,
             KeyCode::Char('?') => {
                 self.help_page = Some(1);
                 self.help_scroll = 0;
@@ -500,21 +566,21 @@ impl App {
                 self.resort();
             }
             KeyCode::Char('d') => {
-                if self.imported {
+                if !self.can_delete {
                     self.message = Some("Deletion feature disabled.".to_string());
                 } else {
                     self.request_delete();
                 }
             }
             KeyCode::Char('r') => {
-                if self.imported {
+                if !self.can_refresh {
                     self.message = Some("Directory refresh feature disabled.".to_string());
                 } else {
                     self.job = Some(Job::Refresh);
                 }
             }
             KeyCode::Char('b') => {
-                if self.imported {
+                if !self.can_shell {
                     self.message = Some("Shell feature disabled.".to_string());
                 } else {
                     self.job = Some(Job::Shell);
@@ -544,14 +610,27 @@ fn is_hidden(tree: &Tree, idx: usize) -> bool {
 ///
 /// `show_as` selects the SIZE or the ASIZE column, exactly like the C version
 /// where the `a` key switches both the display and the sort column.
-fn cmp_entries(a: &Node, b: &Node, an: &str, bn: &str, col: SortCol, show_as: bool) -> Ordering {
+#[allow(clippy::too_many_arguments)]
+fn cmp_entries(
+    a: &Node,
+    b: &Node,
+    an: &str,
+    bn: &str,
+    col: SortCol,
+    show_as: bool,
+    natsort_on: bool,
+) -> Ordering {
     let (size, asize) = if show_as {
         (a.asize.cmp(&b.asize), a.size.cmp(&b.size))
     } else {
         (a.size.cmp(&b.size), a.asize.cmp(&b.asize))
     };
     let items = a.items.cmp(&b.items);
-    let name = natsort(an, bn);
+    let name = if natsort_on {
+        natsort(an, bn)
+    } else {
+        an.cmp(bn)
+    };
     match col {
         SortCol::Size => size.then(asize).then(name).then(items),
         SortCol::Name => name.then(size).then(asize).then(items),

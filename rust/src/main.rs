@@ -31,7 +31,7 @@ use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 
-use app::{App, DisplayOptions};
+use app::{App, DisplayOptions, SortCol};
 use scan::{ScanOptions, Scanner, Tree};
 use theme::Theme;
 
@@ -72,6 +72,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut show_mtime = false;
     let mut show_items = false;
     let mut graph: u8 = 1;
+    let mut sort_col = SortCol::Size;
+    let mut sort_desc = true;
+    let mut sort_df = false;
+    let mut natsort = true;
+    let mut can_delete = true;
+    let mut can_shell = true;
+    let mut can_refresh = true;
+    let mut confirm_quit = false;
+    let mut delete_confirm = true;
+    // -0/-1/-2: how much feedback the scan gives (2 = full screen, the default
+    // when browsing; the C version picks 0/1 by itself when exporting).
+    let mut ui_level: u8 = 2;
+    // -q: refresh the scan screen every 2 s instead of 10 times a second.
+    let mut slow_ui = false;
     let mut export: Option<PathBuf> = None;
     let mut import: Option<PathBuf> = None;
 
@@ -115,6 +129,38 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "--hide-graph" => graph &= !1,
             "--show-percent" => graph |= 2,
             "--hide-percent" => graph &= !2,
+            // Feature switches (src/main.c:194-222).
+            "--enable-delete" => can_delete = true,
+            "--disable-delete" => can_delete = false,
+            "--enable-shell" => can_shell = true,
+            "--disable-shell" => can_shell = false,
+            "--enable-refresh" => can_refresh = true,
+            "--disable-refresh" => can_refresh = false,
+            // Read-only mode: -r disables deletion, -rr the shell as well.
+            "-r" | "-rr" => {
+                can_delete = false;
+                if arg == "-rr" {
+                    can_shell = false;
+                }
+            }
+            "--confirm-quit" => confirm_quit = true,
+            "--no-confirm-quit" => confirm_quit = false,
+            "--confirm-delete" => delete_confirm = true,
+            "--no-confirm-delete" => delete_confirm = false,
+            "--enable-natsort" => natsort = true,
+            "--disable-natsort" => natsort = false,
+            "--group-directories-first" => sort_df = true,
+            "--no-group-directories-first" => sort_df = false,
+            "--sort" => {
+                let value = args.next().ok_or("--sort requires a column")?;
+                parse_sort(&value, &mut sort_col, &mut sort_desc, &mut show_as)?;
+            }
+            // Interface level and update interval (ncdu.1 "Interface Options").
+            "-0" => ui_level = 0,
+            "-1" => ui_level = 1,
+            "-2" => ui_level = 2,
+            "-q" | "--slow-ui-updates" => slow_ui = true,
+            "--fast-ui-updates" => slow_ui = false,
             "--si" => ui::set_si(true),
             "--no-si" => ui::set_si(false),
             "--color" => {
@@ -150,7 +196,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         show_mtime,
         show_items,
         graph,
-        sort_df: false,
+        sort_df,
+        sort_col,
+        sort_desc,
+        natsort,
+        can_delete,
+        can_shell,
+        can_refresh,
+        confirm_quit,
+        delete_confirm,
+        ui_level,
+        slow_ui,
     };
 
     // Mode 1: load an export file ("-" = stdin), optionally re-exporting it
@@ -238,6 +294,45 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Scans without any terminal interaction (used when stdout is redirected).
+/// `--sort COLUMN[-asc|-desc]`. The column names follow the C version
+/// (src/main.c:341): disk-usage, name, apparent-size, itemcount, mtime.
+fn parse_sort(
+    value: &str,
+    col: &mut SortCol,
+    desc: &mut bool,
+    show_as: &mut bool,
+) -> Result<(), String> {
+    let (name, order) = if let Some(rest) = value.strip_suffix("-asc") {
+        (rest, Some(false))
+    } else if let Some(rest) = value.strip_suffix("-desc") {
+        (rest, Some(true))
+    } else {
+        (value, None)
+    };
+    match name {
+        "disk-usage" => {
+            *col = SortCol::Size;
+            *show_as = false;
+        }
+        // The apparent size is the same column, just the other metric - which
+        // matches how `a` toggles the C version.
+        "apparent-size" => {
+            *col = SortCol::Size;
+            *show_as = true;
+        }
+        "name" => *col = SortCol::Name,
+        "itemcount" => *col = SortCol::Items,
+        "mtime" => *col = SortCol::Mtime,
+        _ => return Err(format!("unknown --sort column: {value}")),
+    }
+    // Names read best ascending, every other column starts with the biggest.
+    *desc = !matches!(*col, SortCol::Name);
+    if let Some(order) = order {
+        *desc = order;
+    }
+    Ok(())
+}
+
 fn scan_plain(
     path: &Path,
     options: &ScanOptions,
@@ -314,13 +409,22 @@ fn run_tui(
     let mut scanner = Scanner::new(path, options.clone())?;
     let mut aborted = false;
     let mut last_draw: Option<Instant> = None;
+    // -q / --slow-ui-updates: 2 s instead of the default 10 updates a second.
+    let interval = if display.slow_ui {
+        Duration::from_secs(2)
+    } else {
+        SCAN_UI_INTERVAL
+    };
 
     loop {
         let done = scanner.step(SCAN_BATCH);
-        let redraw = done || last_draw.is_none_or(|t| t.elapsed() >= SCAN_UI_INTERVAL);
+        let redraw = done || last_draw.is_none_or(|t| t.elapsed() >= interval);
 
         if redraw {
-            terminal.draw(|frame| ui::draw_scan(frame, &scanner, &theme.colors()))?;
+            // -0: no feedback at all until the scan is done.
+            if display.ui_level > 0 {
+                terminal.draw(|frame| ui::draw_scan(frame, &scanner, &theme.colors()))?;
+            }
             last_draw = Some(Instant::now());
             if let Some(key) = poll_key(Duration::ZERO)?
                 && is_abort_key(&key)

@@ -269,7 +269,7 @@ bash scripts/compare.sh --skip-perf           # 跳过性能测量
 | job | 内容 |
 | --- | --- |
 | `test` | Linux / macOS / Windows 三平台矩阵：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、`cargo build --release` |
-| `interop` | Ubuntu：装 `libncurses-dev`，让 `compare.sh` 自行构建 C 版并在一个小目录上跑全部断言（`--skip-perf`，因为 runner 的计时噪声太大） |
+| `interop` | Ubuntu：装 `libncurses-dev` 与 autotools，让 `compare.sh` 自行构建 C 版并在一个小目录上跑全部断言（`--skip-perf`，因为 runner 的计时噪声太大）。**C 版的构建产物有缓存**（生成的构建系统 + `src/*.o`，key 覆盖源码），源码没变时不会重编 |
 | `msrv` | 用 1.88.0（声明的最低版本）编译并跑测试，防止不知不觉用上新语法 |
 
 只在 `rust/**` 或工作流文件本身变化时触发，C 版的改动不会打扰它。本地等价的一条命令：

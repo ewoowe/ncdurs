@@ -505,7 +505,7 @@ impl Scanner {
                     excluded: false,
                     othfs: false,
                     kernfs: false,
-            serr: false,
+                    serr: false,
                     ext: ExtInfo::default(),
                     has_ext: false,
                 });

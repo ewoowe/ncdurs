@@ -1,0 +1,87 @@
+# Builds downloadable binaries for the Rust implementation.
+#
+# Triggered by a tag like `rust-v0.1.0` (the prefix keeps it apart from the
+# upstream ncdu tags) and attaches one archive per platform to that release.
+# A manual run only builds the archives as workflow artifacts - nothing is
+# published unless the ref is a tag.
+#
+# Usage:
+#   git tag rust-v0.1.0 && git push ewoowe rust-v0.1.0
+
+name: release
+
+on:
+  push:
+    tags:
+      - "rust-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: cargo build --release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # The tag is the version; a manual run gets a dev-ish name instead.
+      - name: package
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#rust-v}"
+          if [ "$version" = "$GITHUB_REF_NAME" ]; then
+            version="dev-${GITHUB_SHA:0:7}"
+          fi
+          name="ncdurs-$version-${{ matrix.target }}"
+          mkdir -p "$name"
+          cp README.md "$name/"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/ncdurs.exe" "$name/"
+            archive="$name.zip"
+            7z a "$archive" "$name" > /dev/null
+          else
+            cp "target/${{ matrix.target }}/release/ncdurs" "$name/"
+            archive="$name.tar.gz"
+            tar czf "$archive" "$name"
+          fi
+          echo "ASSET=rust/$archive" >> "$GITHUB_ENV"
+          echo "Packaged $archive"
+          ls -l "$archive"
+
+      - name: upload as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ncdurs-${{ matrix.target }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+      - name: attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET }}
+          generate_release_notes: true

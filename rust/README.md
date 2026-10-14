@@ -277,6 +277,27 @@ cd rust
 cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
+### 发布二进制
+
+推一个 tag 会触发 `.github/workflows/release.yml`，构建三平台二进制并附到对应 Release：
+
+```bash
+git tag rust-v0.1.0
+git push ewoowe rust-v0.1.0
+```
+
+`rust-v` 前缀是为了与上游 ncdu 的 tag 区分开。产物（`strip` 已开启，每个约 1 MB）：
+
+```
+ncdurs-0.1.0-x86_64-unknown-linux-gnu.tar.gz
+ncdurs-0.1.0-aarch64-apple-darwin.tar.gz
+ncdurs-0.1.0-x86_64-pc-windows-msvc.zip
+```
+
+每个包里是 `ncdurs`（Windows 为 `ncdurs.exe`）与 `README.md`。手动触发该工作流（Actions → release → Run workflow）只构建归档并作为 workflow artifact 上传，**不会**发 Release。
+
+两点说明：Linux 产物是动态链接 glibc 的，目标机器 glibc 太旧时自行 `cargo build --release`；Windows 的硬链接去重尚未实现（见上文），扫码结果会比 Linux 略大。
+
 ### 导出文件逐字节对照
 
 想确认"两边导出的 JSON 是不是一模一样"，用规范化后的 diff（元数据与 `dev` 字段先去掉；`dev` 我们暂不保存）：

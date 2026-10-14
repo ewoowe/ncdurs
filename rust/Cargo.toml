@@ -6,6 +6,11 @@ edition = "2024"
 [dependencies]
 ratatui = { version = "0.30.2", features = ["crossterm"] }
 
+[profile.release]
+# The downloadable binaries do not need symbols; stripping takes them from a
+# few MB down to about one.
+strip = true
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 

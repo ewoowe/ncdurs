@@ -81,6 +81,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut can_delete = true;
     let mut can_shell = true;
     let mut can_refresh = true;
+    // How often `-r` was given: once disables deletion, twice the shell too.
+    let mut readonly = 0;
     let mut confirm_quit = false;
     let mut delete_confirm = true;
     // -0/-1/-2: how much feedback the scan gives (2 = full screen, the default
@@ -91,7 +93,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut export: Option<PathBuf> = None;
     let mut import: Option<PathBuf> = None;
 
-    let mut args = env::args().skip(1);
+    // The command line is expanded first, so short options may be clustered
+    // and may carry their value in the same word - both of which the C
+    // version's parser accepts ("-1xo-", "-Xpatterns", "--sort=name").
+    let mut args = expand_args(env::args().skip(1).collect()).into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-h" | "--help" => {
@@ -152,10 +157,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "--disable-shell" => can_shell = false,
             "--enable-refresh" => can_refresh = true,
             "--disable-refresh" => can_refresh = false,
-            // Read-only mode: -r disables deletion, -rr the shell as well.
-            "-r" | "-rr" => {
+            // Read-only mode: -r disables deletion; -r -r (written -rr, which
+            // the expansion above turns into that) the shell as well.
+            "-r" => {
+                readonly += 1;
                 can_delete = false;
-                if arg == "-rr" {
+                if readonly >= 2 {
                     can_shell = false;
                 }
             }
@@ -314,6 +321,64 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// Scans without any terminal interaction (used when stdout is redirected).
 /// `--sort COLUMN[-asc|-desc]`. The column names follow the C version
 /// (src/main.c:341): disk-usage, name, apparent-size, itemcount, mtime.
+/// Short options that take a value: either the rest of the same word
+/// ("-oFILE", "-o-") or the next argument ("-o FILE").
+const SHORT_WITH_VALUE: [char; 2] = ['o', 'X'];
+
+/// Expands the command line the way the C version's parser does:
+///
+///   -1xo-        ->  -1 -x -o -
+///   -rr          ->  -r -r
+///   -Xpatterns   ->  -X patterns
+///   --sort=name  ->  --sort name
+///
+/// Anything after a bare `--` is passed through untouched.
+fn expand_args(args: Vec<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = args.into_iter().peekable();
+    while let Some(arg) = rest.next() {
+        if arg == "--" {
+            out.push(arg);
+            out.extend(rest);
+            break;
+        }
+        if let Some(body) = arg.strip_prefix("--") {
+            match body.split_once('=') {
+                Some((name, value)) => {
+                    out.push(format!("--{name}"));
+                    out.push(value.to_string());
+                }
+                None => out.push(arg),
+            }
+            continue;
+        }
+        // A cluster of short options: -1xo-, -rr, -ax ...
+        if arg.len() > 2 && arg.starts_with('-') {
+            let body: Vec<char> = arg.chars().skip(1).collect();
+            let mut i = 0;
+            while i < body.len() {
+                let c = body[i];
+                out.push(format!("-{c}"));
+                if SHORT_WITH_VALUE.contains(&c) {
+                    let tail: String = body[i + 1..].iter().collect();
+                    if tail.is_empty() {
+                        if let Some(value) = rest.next() {
+                            out.push(value);
+                        }
+                    } else {
+                        out.push(tail);
+                    }
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        out.push(arg);
+    }
+    out
+}
+
 fn parse_sort(
     value: &str,
     col: &mut SortCol,
@@ -739,6 +804,41 @@ Notes:
 #[cfg(test)]
 mod tests {
     use super::level_for;
+
+    #[test]
+    fn expands_short_option_clusters() {
+        use super::expand_args;
+
+        fn list(v: &[&str]) -> Vec<String> {
+            v.iter().map(|s| s.to_string()).collect()
+        }
+
+        // The manual's own example: ncdu -1xo- / | gzip >export.gz
+        assert_eq!(
+            expand_args(list(&["-1xo-", "/usr"])),
+            list(&["-1", "-x", "-o", "-", "/usr"])
+        );
+        assert_eq!(expand_args(list(&["-rr"])), list(&["-r", "-r"]));
+        assert_eq!(
+            expand_args(list(&["-Xpatterns"])),
+            list(&["-X", "patterns"])
+        );
+        assert_eq!(expand_args(list(&["-o", "-"])), list(&["-o", "-"]));
+        // The value may also be the next word, as with a plain -o.
+        assert_eq!(expand_args(list(&["-o"])), list(&["-o"]));
+        assert_eq!(
+            expand_args(list(&["--sort=name"])),
+            list(&["--sort", "name"])
+        );
+        // Nothing to do for simple options and for --sort name.
+        assert_eq!(expand_args(list(&["-a"])), list(&["-a"]));
+        assert_eq!(
+            expand_args(list(&["--sort", "name"])),
+            list(&["--sort", "name"])
+        );
+        // Everything after a bare -- stays untouched.
+        assert_eq!(expand_args(list(&["--", "-1x"])), list(&["--", "-1x"]));
+    }
 
     #[test]
     fn ncdu_level_follows_the_c_version() {

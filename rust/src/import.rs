@@ -106,6 +106,7 @@ fn parse_item(
     let mut excluded = false;
     let mut kernfs = false;
     let mut othfs = false;
+    let mut nlink = 0u32;
     // The `-e` fields; has_ext is set as soon as one of them shows up.
     let mut ext = crate::platform::ExtInfo::default();
     let mut has_ext = false;
@@ -137,7 +138,9 @@ fn parse_item(
             "ino" => ino = p.u64()?,
             "hlnkc" => hlnkc = p.boolean()?,
             "nlink" => {
-                if p.u64()? > 1 {
+                let links = p.u64()?;
+                nlink = links as u32;
+                if links > 1 {
                     hlnkc = true;
                 }
             }
@@ -175,9 +178,13 @@ fn parse_item(
     }
     let name = name.ok_or_else(|| p.err("item without a \"name\" field"))?;
 
-    // A file with multiple hard links is counted only once, like in a scan.
+    // Hard links: every link keeps its own size (the writer records it for each
+    // one and the browser shows it), but only the first counts towards the
+    // totals. `counted` remembers that, and the returned Item carries the
+    // contribution to the parent.
     let dup = hlnkc && !ctx.links.insert((dev, ino));
-    let (own_size, own_asize) = if dup { (0, 0) } else { (dsize, asize) };
+    let (own_size, own_asize) = (dsize, asize);
+    let contribution = if dup { (0, 0) } else { (own_size, own_asize) };
 
     let idx = tree.push_node(parent, &name, is_dir);
     tree.nodes[idx].error = read_error;
@@ -185,6 +192,10 @@ fn parse_item(
     tree.nodes[idx].excluded = excluded;
     tree.nodes[idx].kernfs = kernfs;
     tree.nodes[idx].othfs = othfs;
+    tree.nodes[idx].hlnkc = hlnkc;
+    tree.nodes[idx].ino = ino;
+    tree.nodes[idx].nlink = nlink;
+    tree.nodes[idx].counted = !dup;
     tree.nodes[idx].ext = ext;
     tree.nodes[idx].has_ext = has_ext;
 
@@ -193,8 +204,8 @@ fn parse_item(
         tree.nodes[idx].asize = own_asize;
         return Ok(Item {
             idx,
-            size: own_size,
-            asize: own_asize,
+            size: contribution.0,
+            asize: contribution.1,
             items: 0,
         });
     }
@@ -584,7 +595,12 @@ mod tests {
         let tree = read(json.as_bytes()).unwrap();
         assert_eq!(tree.nodes[0].size, 512); // counted once
         assert_eq!(tree.nodes[0].items, 2); // but both entries are listed
-        assert_eq!(tree.nodes[2].size, 0);
+        // Every link keeps its own size (it is listed and exported for each
+        // one); only the totals count it once, which is what `counted` says.
+        assert_eq!(tree.nodes[1].size, 512);
+        assert_eq!(tree.nodes[2].size, 512);
+        assert!(tree.nodes[1].counted);
+        assert!(!tree.nodes[2].counted);
     }
 
     #[test]

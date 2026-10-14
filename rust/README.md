@@ -189,7 +189,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | 扫描进度页（当前路径 / 条目数 / 已扫大小 / 可中止） | 支持 | 已实现 |
 | 硬链接去重 | 支持（并标记 `H`） | 支持（Unix；Windows 暂缺，且无标记） |
 | 条目状态标记（`!` `.` `<` `e` `>` `@` `^` `H` `F`） | 9 种，显示在名称前 | 已实现七种：`!`（自己读取失败）、`.`（**后代**中有目录读取失败，尺寸可能不准）、`<`（被排除）、`>`（其它文件系统）、`^`（Linux 伪文件系统）、`e`（空目录）、`@`（非普通文件）。缺 `H`（硬链接已计过，需记账方式对齐）与 `F`（firmlink，需 macOS） |
-| 配置文件（`/etc/ncdu.conf`、`$XDG_CONFIG_HOME/ncdu/config` 或 `~/.config/ncdu/config`） | 支持 | 已实现：每行一个选项（可含值，如 `--exclude .git`）、`#` 注释、空行忽略、行首 `@` 表示该行允许文件不存在（手册的例子 `@--exclude-from ~/.ncduexcludes`）；**先系统级后用户级**，且**命令行参数优先于配置**。仓库里带了一份示例：`ncdu.conf.example`（全部注释掉，直接拷过去不改变任何行为） |
+| 配置文件（`/etc/ncdu.conf`、`$XDG_CONFIG_HOME/ncdu/config` 或 `~/.config/ncdu/config`） | 支持 | 已实现：每行一个选项（可含值，如 `--exclude .git`）、`#` 注释、空行忽略、行首 `@` 表示该行允许文件不存在（手册的例子 `@--exclude-from ~/.ncduexcludes`）；**先系统级后用户级**，且**命令行参数优先于配置**。仓库里带了一份示例：`ncdu.conf.example`（全部注释掉，直接拷过去不改变任何行为）。**这份文件是本实现额外提供的** —— 原版没有示例文件，它只在 `ncdu.1` 的 CONFIGURATION FILE 段里内联了几行例子 |
 | 环境变量 `NCDU_SHELL`、`NCDU_LEVEL` | 支持 | 已实现（`b` 使用；`NCDU_LEVEL` 每次会话递增一次） |
 | 导出 / 导入 JSON | 支持 | 已实现（与 C 版双向互通，见「用法」） |
 | 显示列（图 / 百分比 / itemcount / mtime） | 可自由开关 | 已实现（`--show-*` 开关与 `c`/`m`/`g` 键） |

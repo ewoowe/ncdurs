@@ -68,6 +68,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut one_file_system = false;
     let mut exclude_caches = false;
     let mut exclude_kernfs = false;
+    let mut follow_symlinks = false;
     let mut extended = false;
     let mut show_hidden = true;
     let mut show_mtime = false;
@@ -124,6 +125,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "--include-caches" => exclude_caches = false,
             "--exclude-kernfs" => exclude_kernfs = true,
             "--include-kernfs" => exclude_kernfs = false,
+            "-L" | "--follow-symlinks" => follow_symlinks = true,
+            "--no-follow-symlinks" => follow_symlinks = false,
             "-e" | "--extended" => extended = true,
             "--no-extended" => extended = false,
             "--show-hidden" => show_hidden = true,
@@ -263,6 +266,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         one_file_system,
         exclude_caches,
         exclude_kernfs,
+        follow_symlinks,
         extended,
     };
 
@@ -738,6 +742,8 @@ Options:
   -x, --one-file-system    Do not cross filesystem boundaries
       --exclude-caches     Skip directories that hold a CACHEDIR.TAG
       --exclude-kernfs     Skip Linux pseudo filesystems (proc, sys, cgroup, ...)
+  -L, --follow-symlinks    Count a symlink to a file as that file (links to
+                           directories are never followed)
   -e, --extended           Collect uid/gid/mode/mtime (enables the mtime
                            column with 'm' and sorting by it with 'M')
       --show-hidden        Show hidden and excluded entries (default, 'e' key)

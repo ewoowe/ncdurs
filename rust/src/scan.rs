@@ -284,6 +284,8 @@ pub struct ScanOptions {
     pub exclude_caches: bool,
     /// `--exclude-kernfs`: skip Linux pseudo filesystems.
     pub exclude_kernfs: bool,
+    /// `-L`: count a symlink to a file as the file it points at.
+    pub follow_symlinks: bool,
     /// `-e`: collect uid/gid/mode/mtime for every entry.
     pub extended: bool,
 }
@@ -516,8 +518,23 @@ impl Scanner {
             }
         };
 
-        // Symlinks are not followed: symlink_metadata() reports the link
-        // itself, so a symlink to a directory is not entered.
+        // Symlinks are not followed by default: symlink_metadata() reports the
+        // link itself, so a symlink to a directory is not entered.
+        //
+        // With -L a symlink to a *file* is counted as the file it points at -
+        // links to directories are never followed, exactly like the C version
+        // does it (src/dir_scan.c:304-309). Everything below uses this
+        // metadata, so such a link also stops being "notreg" ('@').
+        let md = if self.options.follow_symlinks && md.file_type().is_symlink() {
+            let name = self.tree.name_of(name_ref);
+            fs::metadata(name)
+                .ok()
+                .filter(|target| !target.is_dir())
+                .unwrap_or(md)
+        } else {
+            md
+        };
+
         let is_dir = md.is_dir();
 
         // `-e`: collect uid/gid/mode/mtime. Only asked for when the option is
@@ -1076,6 +1093,40 @@ mod tests {
         // the listing shows "0.0 B" rather than the directory block.
         assert_eq!(tree.nodes[git].size, 0);
         assert_eq!(tree.nodes[git].asize, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn follow_symlinks_counts_the_target_file() {
+        let _guard = lock();
+        let tmp = TempDir::new("follow");
+        fs::create_dir(tmp.0.join("real")).unwrap();
+        fs::write(tmp.0.join("real/f"), vec![b'x'; 5_000]).unwrap();
+        std::os::unix::fs::symlink(tmp.0.join("real/f"), tmp.0.join("link")).unwrap();
+        std::os::unix::fs::symlink(tmp.0.join("real"), tmp.0.join("dirlink")).unwrap();
+
+        // Without -L the link itself is counted, and it is "notreg".
+        let (tree, _) = scan(&tmp.0).unwrap();
+        let link = find_child(&tree, 0, "link");
+        assert!(tree.nodes[link].notreg, "a symlink is not a regular file");
+        assert!(tree.nodes[link].asize < 5_000);
+
+        // With -L the file it points at is counted instead.
+        let options = ScanOptions {
+            follow_symlinks: true,
+            ..Default::default()
+        };
+        let mut scanner = Scanner::new(&tmp.0, options).unwrap();
+        while !scanner.step(usize::MAX) {}
+        let (tree, _) = scanner.into_result();
+        let link = find_child(&tree, 0, "link");
+        assert!(!tree.nodes[link].notreg, "-L turns it into a regular file");
+        assert_eq!(tree.nodes[link].asize, 5_000, "-L counts the target's size");
+
+        // A link to a directory is still not followed.
+        let dirlink = find_child(&tree, 0, "dirlink");
+        assert!(tree.nodes[dirlink].notreg);
+        assert!(tree.nodes[dirlink].children.is_empty());
     }
 
     #[cfg(unix)]

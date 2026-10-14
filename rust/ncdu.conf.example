@@ -1,0 +1,67 @@
+# ncdurs example configuration
+#
+# Copy this file to ~/.config/ncdu/config (or to /etc/ncdu.conf for a
+# system-wide one) and uncomment what you need. Everything in here is
+# commented out on purpose: as it stands, the file changes nothing.
+#
+# Format (identical to the C version):
+#   - one option per line; an option and its value are separated by spaces
+#   - '#' starts a comment, blank lines are ignored
+#   - a leading '@' makes the line tolerant: a file it refers to may be
+#     missing without that being an error
+#   - options given on the command line always win over this file
+#
+# The paths are, in this order: /etc/ncdu.conf, then
+# $XDG_CONFIG_HOME/ncdu/config or ~/.config/ncdu/config.
+
+# --- scanning -------------------------------------------------------------
+
+# Collect uid/gid/mode/mtime. Enables the mtime column ('m') and sorting by
+# it ('M'), and makes the export carry those four fields.
+# -e
+
+# Leave matching entries out of the statistics. A pattern is matched against
+# the whole path *and* every suffix of it, so ".git" also hits
+# "/home/me/project/.git".
+# --exclude .git
+# --exclude node_modules
+# --exclude *.iso
+
+# Read further patterns from a file, one per line. The '@' means a missing
+# file is not an error - handy for a personal exclude list.
+# @--exclude-from ~/.ncduexcludes
+
+# Do not cross filesystem boundaries; skip cache directories (those holding a
+# CACHEDIR.TAG) and Linux pseudo filesystems such as /proc and /sys.
+# -x
+# --exclude-caches
+# --exclude-kernfs
+
+# Count a symlink to a file as the file it points at.
+# -L
+
+# --- interface ------------------------------------------------------------
+
+# Colour scheme: auto (the default) uses the dark theme on colour-capable
+# terminals and off otherwise. The C version has no 'auto'.
+# --color auto
+# --color dark
+
+# Which columns and which sort order to start with.
+# --show-itemcount
+# --show-mtime
+# --show-percent
+# --graph-style eighth-block
+# --sort name
+# --group-directories-first
+
+# --- safety ---------------------------------------------------------------
+
+# Read-only mode: '-r' disables deletion, '-rr' the shell as well.
+# -r
+
+# Ask before quitting (deletion already asks by default).
+# --confirm-quit
+
+# Ignore this file entirely. Also available on the command line.
+# --ignore-config

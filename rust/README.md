@@ -81,7 +81,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 
 ## 与原版 ncdu（C 版 1.22）的对比
 
-下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 36 项、部分实现 4 项、未实现 19 项。
+下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 47 项、部分实现 4 项、未实现 8 项。
 
 ### 数值一致性
 
@@ -137,12 +137,12 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `-L, --follow-symlinks` / `--no-follow-symlinks` | 未实现 | 行为等同原版默认（不跟随） |
 | `--exclude-kernfs` / `--include-kernfs` | 未实现 | |
 | `--exclude-firmlinks` / `--follow-firmlinks`（macOS） | 未实现 | |
-| `-0` / `-1` / `-2`（UI 级别） | 未实现 | 只有全屏界面 |
-| `-q, --slow-ui-updates` / `--fast-ui-updates` | 未实现 | 扫描期刷新间隔固定 50 ms |
-| `--enable-shell` / `--disable-shell` | 未实现 | `b` 键已可用，缺命令行开关 |
-| `--enable-delete` / `--disable-delete` | 未实现 | `d` 键已可用（带确认），缺命令行开关 |
-| `--enable-refresh` / `--disable-refresh` | 未实现 | `r` 键已可用，缺命令行开关 |
-| `-r` / `-rr`（只读） | 未实现 | 尚无只读模式（`d`/`r`/`b` 本身可用） |
+| `-0` / `-1` / `-2`（UI 级别） | 已实现 | `-0` 扫描期间完全不绘制（实测：默认输出 5161 字节 vs `-0` 的 36 字节）；`-1`/`-2` 都走全屏界面（原版的纯文本进度条未实现） |
+| `-q, --slow-ui-updates` / `--fast-ui-updates` | 已实现 | 刷新间隔 2 s ↔ 50 ms |
+| `--enable-shell` / `--disable-shell` | 已实现 | 门控 `b` 键，禁用时弹 `Shell feature disabled.` |
+| `--enable-delete` / `--disable-delete` | 已实现 | 门控 `d` 键，禁用时弹 `Deletion feature disabled.` |
+| `--enable-refresh` / `--disable-refresh` | 已实现 | 门控 `r` 键，禁用时弹 `Directory refresh feature disabled.` |
+| `-r` / `-rr`（只读） | 已实现 | `-r` = `--disable-delete`；`-rr` 再加 `--disable-shell`（同手册）；导入的树本就只读 |
 | `--si` / `--no-si` | 已实现 | 十进制（kB/MB）与二进制（KiB/MiB）单位切换 |
 | `-a, --apparent-size` / `--disk-usage` | 部分 | 默认即磁盘占用，有 `-a`；没有 `--disk-usage` 显式开关 |
 | `--show-hidden` / `--hide-hidden` | 已实现 | 隐藏点文件、`~` 结尾的备份文件与被排除项（`e` 键同）；只影响列表，不影响尺寸 |
@@ -151,11 +151,11 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `--show-graph` / `--hide-graph` | 已实现 | 与 `--show-percent` 共同构成 0..3 的 `graph` 值（bit 0 = 条形、bit 1 = 百分比），`g` 键循环 |
 | `--show-percent` / `--hide-percent` | 已实现 | 百分比的基准是**当前目录总量**，与条形的"列表最大值"基准不同（同 C 版） |
 | `--graph-style hash\|half-block\|eighth-block` | 未实现 | 固定 `#` 风格；**宽度已自适应**（`max(wincols/7, 10)`） |
-| `--sort COLUMN` | 未实现 | 界面内 `s`/`n`/`C`/`M` 已可切换排序列 |
-| `--enable-natsort` / `--disable-natsort` | 未实现 | 自然序已照 `deps/strnatcmp.c` 实现并默认开启 |
-| `--group-directories-first` / `--no-group-directories-first` | 未实现 | 界面内 `t` 键已可用 |
-| `--confirm-quit` / `--no-confirm-quit` | 未实现 | 退出无二次确认 |
-| `--confirm-delete` / `--no-confirm-delete` | 未实现 | 删除默认就有 `y/n` 确认（含"don't ask me again"），缺命令行开关 |
+| `--sort COLUMN` | 已实现 | 取值 `disk-usage`（默认）/ `name` / `apparent-size` / `itemcount` / `mtime`，可加 `-asc` / `-desc` 后缀；`apparent-size` 同时切换大小口径 |
+| `--enable-natsort` / `--disable-natsort` | 已实现 | 关闭后退化为逐字节比较（自然序照 `deps/strnatcmp.c`，默认开启） |
+| `--group-directories-first` / `--no-group-directories-first` | 已实现 | 与 `t` 键等价 |
+| `--confirm-quit` / `--no-confirm-quit` | 已实现 | 弹出 `ncdu confirm quit` 窗口（`Really quit? (y/N)`），照 `src/quit.c` |
+| `--confirm-delete` / `--no-confirm-delete` | 已实现 | 控制删除确认（含"don't ask me again"），与 `d` 键同一状态 |
 | `--color off\|dark\|dark-bg` | 已实现 | 三套主题逐槽照抄 `src/util.h` 的 `UI_COLORS`；另加原版没有的 `auto` 并作为默认（`NO_COLOR` 已设置、或 `TERM` 为空 / `dumb` 时回退 `off`，否则用 `dark`） |
 
 ### 界面按键
@@ -358,8 +358,8 @@ cargo check --target x86_64-pc-windows-msvc
 待实现（按优先级）：
 
 1. `--exclude-kernfs`（需要读挂载表判断 Linux 伪文件系统）；
-2. `--graph-style`（half-block / eighth-block）与 `--enable-natsort` / `--disable-natsort` 开关；
-3. `--sort COLUMN` 与 `--sort-dir-first` 类的命令行开关（界面内 `s`/`n`/`C`/`M`/`t` 已可切换）；
+2. `--graph-style`（half-block / eighth-block）与 `-L` / `--follow-symlinks`；
+3. 配置文件（`/etc/ncdu.conf`、`~/.config/ncdu/config`）与 `--ignore-config`；
 4. Windows 硬链接去重、Windows 隐藏/系统属性过滤；
 5. （可选）内核调用优化：用 `openat`/`fstatat` 或 libc 直调替代 std 的 `statx`；
 6. （可选）arena 垃圾回收（compact），回收删除/刷新留下的不可达节点；

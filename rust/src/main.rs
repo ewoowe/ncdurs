@@ -666,6 +666,19 @@ Options:
       --hide-graph         Hide the bar graph
       --show-percent       Show the percentage (default: off)
       --hide-percent       Hide the percentage
+      --sort COLUMN        Sort by disk-usage (default) / name / apparent-size /
+                           itemcount / mtime, optionally with -asc or -desc
+      --enable-natsort     Natural order when sorting by name (default)
+      --disable-natsort    Compare names byte-wise instead
+      --group-directories-first / --no-group-directories-first
+      --confirm-quit       Ask before quitting
+      --confirm-delete     Ask before deleting (default)
+      --enable-delete / --disable-delete
+      --enable-shell / --disable-shell
+      --enable-refresh / --disable-refresh
+  -r / -rr                 Read-only: -r disables delete, -rr the shell as well
+  -0 / -1 / -2             Feedback while scanning: none / full screen (default)
+  -q, --slow-ui-updates    Refresh the scan screen every 2 s
       --color SCHEME    Colour scheme: auto (default), off, dark, dark-bg
   -o, --export FILE     Scan and write the result as JSON to FILE (use - for stdout)
   -f, --import FILE     Load a FILE created with -o and browse it (use - for stdin)

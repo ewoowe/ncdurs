@@ -82,6 +82,10 @@ jobs:
             config.h
             config.status
             Makefile
+            compile
+            depcomp
+            install-sh
+            missing
             src/*.o
           key: c-build-${{ runner.os }}-${{ hashFiles('configure.ac', 'Makefile.am', 'src/**') }}
           restore-keys: |
@@ -89,7 +93,13 @@ jobs:
       - name: bootstrap and configure the C version
         working-directory: .
         run: |
-          [ -x ./configure ] || autoreconf -i
+          # "autoreconf -i" also installs the auxiliary scripts (install-sh,
+          # missing, compile, depcomp), and those are gitignored too. Checking
+          # one of them as well keeps a cache that lost them from breaking
+          # configure with "cannot find required auxiliary files".
+          if [ ! -x ./configure ] || [ ! -f ./install-sh ]; then
+            autoreconf -i
+          fi
           ./configure
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2

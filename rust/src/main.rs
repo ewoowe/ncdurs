@@ -118,11 +118,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 print!("{}", usage());
                 return Ok(());
             }
-            "-V" | "--version" => {
+            // -v is a plain synonym for -V/--version (src/main.c:434).
+            "-v" | "-V" | "--version" => {
                 println!("{} {}", NAME, VERSION);
                 return Ok(());
             }
             "-a" | "--apparent-size" => show_as = true,
+            "--disk-usage" => show_as = false,
             "--exclude" => {
                 let pattern = args.next().ok_or("--exclude requires a pattern")?;
                 excludes.add(&pattern);
@@ -800,6 +802,7 @@ Usage: {name} [OPTIONS] [PATH]
 
 Options:
   -a, --apparent-size   Show apparent size instead of disk usage
+      --disk-usage      Show disk usage instead (the default)
       --si / --no-si    Use decimal (kB/MB) instead of binary (KiB/MiB) units
       --exclude PATTERN Leave matching files out of the statistics (repeatable)
   -X, --exclude-from FILE  Read exclude patterns from FILE, one per line

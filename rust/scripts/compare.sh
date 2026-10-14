@@ -8,7 +8,7 @@
 #      并用 `du` 作为 disk usage 的独立基准
 #   3. 边界用例：自动生成含硬链接、稀疏文件、符号链接、无权限目录的树，
 #      再次校验两版结果一致
-#   4. 性能对比：测量「启动到浏览界面出现」的耗时（多次取 min/avg）
+#   4. 性能对比：测量「扫描 + 导出」的耗时（无界面模式，多次取 min/avg）
 #
 # 用法: scripts/compare.sh [DIR] [--runs N] [--no-build] [--skip-perf]
 #   DIR          要比对的目录（默认 /usr）
@@ -306,31 +306,28 @@ interop_dir "边界用例" "$CASE"
 if [ "$SKIP_PERF" = 1 ]; then
   section "性能对比：已跳过"
 else
-  section "性能对比（扫描到浏览界面出现，$RUNS 轮）"
+  section "性能对比（扫描 + 导出到 /dev/null，$RUNS 轮）"
 
   # measure_scan <bin> <dir> → 打印毫秒数
+  #
+  # The scan is timed without the TUI: "-0" plus an export to /dev/null.
+  # ncdurs moves the cursor before every single cell (that is what makes
+  # partial redraws and wide characters safe), so its terminal output contains
+  # no contiguous "Apparent size" text - the previous TUI-based measurement,
+  # which grepped for that string, could never see ncdurs finish. Both versions
+  # scan exactly the same tree here, which is what this comparison is about;
+  # the drawing time of the browser is not covered.
   measure_scan() {
-    local bin="$1" dir="$2" out="$TMP/m.raw" err="$TMP/m.err" i=0 s e
-    rm -f "$out"
+    local bin="$1" dir="$2" s e rc
     s=$(date +%s%N)
-    ( j=0
-      while ! grep -aq 'Apparent' "$out" 2>/dev/null && [ "$j" -lt "$POLL_STEPS" ]; do
-        sleep 0.02; j=$((j + 1))
-      done
-      printf 'q' ) \
-      | TERM="$TERM_VAL" script -qefc "stty rows 40 cols 130; $bin $(printf '%q' "$dir")" /dev/null \
-          >"$out" 2>"$err" &
-    local pid=$!
-    while ! grep -aq 'Apparent' "$out" 2>/dev/null && [ "$i" -lt $((SCAN_TIMEOUT_S * 20)) ]; do
-      sleep 0.05; i=$((i + 1))
-    done
+    TERM="$TERM_VAL" "$bin" -0 -o - "$dir" > /dev/null 2>&1
+    rc=$?
     e=$(date +%s%N)
-    if grep -aq 'Apparent' "$out" 2>/dev/null; then
-      echo $(((e - s) / 1000000))
+    if [ "$rc" -ne 0 ]; then
+      echo "FAILED"
     else
-      echo "TIMEOUT"
+      echo $(((e - s) / 1000000))
     fi
-    wait "$pid" 2>/dev/null
   }
 
   c_times=""

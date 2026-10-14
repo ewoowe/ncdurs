@@ -83,6 +83,15 @@ fn write_item<W: Write>(tree: &Tree, idx: usize, out: &mut W) -> io::Result<()> 
             node.ext.uid, node.ext.gid, node.ext.mode, node.ext.mtime
         )?;
     }
+    // dir_export.c:119-124: hard links carry their inode and link count, which
+    // is how the importer knows to count them only once.
+    if node.hlnkc {
+        write!(
+            out,
+            ",\"ino\":{},\"hlnkc\":true,\"nlink\":{}",
+            node.ino, node.nlink
+        )?;
+    }
     if node.error {
         out.write_all(b",\"read_error\":true")?;
     }
@@ -110,7 +119,9 @@ fn own_sizes(tree: &Tree, idx: usize) -> (u64, u64) {
     for &child in &node.children {
         // Excluded children never reached their parent's totals, so they must
         // not be subtracted from them here either.
-        if tree.nodes[child].excluded {
+        // A repeated hard link lists its size but never reached the parent, so
+        // subtracting it here would eat into the parent's own size.
+        if tree.nodes[child].excluded || !tree.nodes[child].counted {
             continue;
         }
         child_size += tree.nodes[child].size;

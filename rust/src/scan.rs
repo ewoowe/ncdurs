@@ -71,6 +71,17 @@ pub struct Node {
     /// Something *below* this directory could not be read, so its size may be
     /// wrong (the C version's FF_SERR); marked '.'.
     pub serr: bool,
+    /// This is a file with more than one hard link (the C version's FF_HLNKC);
+    /// marked 'H'. Only the first link counts towards the totals, but every
+    /// link keeps its own size in the listing and in the export.
+    pub hlnkc: bool,
+    /// st_ino, written out for hard links (and 0 otherwise).
+    pub ino: u64,
+    /// st_nlink, written out for hard links.
+    pub nlink: u32,
+    /// Whether this entry contributed to its parent's totals. False for a
+    /// repeated hard link: its size is listed and exported, but counted once.
+    pub counted: bool,
     /// Extended information (`-e`). Zeroed when `has_ext` is false.
     pub ext: ExtInfo,
     /// Whether `ext` holds real data (the C version's FF_EXT flag).
@@ -114,6 +125,10 @@ impl Tree {
             othfs: false,
             kernfs: false,
             serr: false,
+            hlnkc: false,
+            ino: 0,
+            nlink: 0,
+            counted: true,
             ext: ExtInfo::default(),
             has_ext: false,
         });
@@ -392,6 +407,10 @@ impl Scanner {
             othfs: false,
             kernfs: false,
             serr: false,
+            hlnkc: false,
+            ino: 0,
+            nlink: 0,
+            counted: true,
             ext: root_ext.unwrap_or_default(),
             has_ext: root_ext.is_some(),
         });
@@ -508,6 +527,10 @@ impl Scanner {
                     othfs: false,
                     kernfs: false,
                     serr: false,
+                    hlnkc: false,
+                    ino: 0,
+                    nlink: 0,
+                    counted: true,
                     ext: ExtInfo::default(),
                     has_ext: false,
                 });
@@ -595,7 +618,9 @@ impl Scanner {
             && platform::file_id(&md).is_some_and(|id| !self.links.insert(id));
         // The C version keeps the sizes at zero for entries it does not scan
         // (src/dir_scan.c:133: FF_OTHFS, FF_EXL and FF_KERNFS all skip it).
-        let (own_size, own_asize) = if dup || excluded || othfs || kernfs {
+        // A repeated hard link is *not* one of them: every link carries its own
+        // size (only the totals count it once).
+        let (own_size, own_asize) = if excluded || othfs || kernfs {
             (0, 0)
         } else {
             let name = self.tree.name_of(name_ref);
@@ -618,6 +643,10 @@ impl Scanner {
             othfs: false,
             kernfs: false,
             serr: false,
+            hlnkc: false,
+            ino: 0,
+            nlink: 0,
+            counted: true,
             ext: ext.unwrap_or_default(),
             has_ext: ext.is_some(),
         });
@@ -629,12 +658,24 @@ impl Scanner {
             n.excluded = excluded;
             n.othfs = othfs;
             n.kernfs = kernfs;
+            n.counted = !dup;
+            // Hard link bookkeeping: the C version sets FF_HLNKC for non
+            // directories with nlink > 1 and exports ino/hlnkc/nlink for them.
+            if !is_dir {
+                let links = platform::nlink(&md);
+                n.hlnkc = links > 1;
+                n.nlink = links as u32;
+                n.ino = platform::file_id(&md).map_or(0, |(_, ino)| ino);
+            }
         }
 
         if !is_dir {
             // Excluded files stay visible but are left out of the statistics.
+            // A repeated hard link still counts as an item, but its size is
+            // added only for the first link.
             if !excluded {
-                self.add_to_parent(own_size, own_asize, 1);
+                let (size, asize) = if dup { (0, 0) } else { (own_size, own_asize) };
+                self.add_to_parent(size, asize, 1);
             }
             return;
         }

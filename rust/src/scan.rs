@@ -1054,7 +1054,11 @@ mod tests {
         assert!(tree.nodes[git].children.is_empty());
         assert!(tree.nodes[0].size < size_with, "size must shrink");
         assert!(tree.nodes[0].items < items_with, "items must shrink");
-        assert_eq!(tree.nodes[git].size, own_size(&tmp.0.join(".git")));
+        // An excluded entry keeps a size of zero, like the C version: it never
+        // reaches the statistics (src/dir_scan.c:133 skips FF_EXL there), so
+        // the listing shows "0.0 B" rather than the directory block.
+        assert_eq!(tree.nodes[git].size, 0);
+        assert_eq!(tree.nodes[git].asize, 0);
     }
 
     #[cfg(unix)]

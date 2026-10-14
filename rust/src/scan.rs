@@ -68,6 +68,9 @@ pub struct Node {
     pub othfs: bool,
     /// Linux pseudo filesystem excluded by `--exclude-kernfs`; marked '^'.
     pub kernfs: bool,
+    /// Something *below* this directory could not be read, so its size may be
+    /// wrong (the C version's FF_SERR); marked '.'.
+    pub serr: bool,
     /// Extended information (`-e`). Zeroed when `has_ext` is false.
     pub ext: ExtInfo,
     /// Whether `ext` holds real data (the C version's FF_EXT flag).
@@ -110,6 +113,7 @@ impl Tree {
             excluded: false,
             othfs: false,
             kernfs: false,
+            serr: false,
             ext: ExtInfo::default(),
             has_ext: false,
         });
@@ -385,6 +389,7 @@ impl Scanner {
             excluded: false,
             othfs: false,
             kernfs: false,
+            serr: false,
             ext: root_ext.unwrap_or_default(),
             has_ext: root_ext.is_some(),
         });
@@ -500,6 +505,7 @@ impl Scanner {
                     excluded: false,
                     othfs: false,
                     kernfs: false,
+            serr: false,
                     ext: ExtInfo::default(),
                     has_ext: false,
                 });
@@ -594,6 +600,7 @@ impl Scanner {
             excluded: false,
             othfs: false,
             kernfs: false,
+            serr: false,
             ext: ext.unwrap_or_default(),
             has_ext: ext.is_some(),
         });
@@ -680,11 +687,21 @@ impl Scanner {
             return;
         }
 
+        // Anything that failed below this directory (a child that could not be
+        // read, or a child that has such a descendant itself) makes this
+        // directory's size unreliable: that is the C version's FF_SERR, drawn
+        // as '.' (src/dir_scan.c returns the failure upwards).
+        let serr = self.tree.nodes[node]
+            .children
+            .iter()
+            .any(|&c| self.tree.nodes[c].error || self.tree.nodes[c].serr);
+
         let (size, asize) = {
             let n = &mut self.tree.nodes[node];
             n.size += frame.size;
             n.asize += frame.asize;
             n.items = frame.items;
+            n.serr = serr;
             (n.size, n.asize)
         };
 

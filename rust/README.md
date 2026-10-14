@@ -81,7 +81,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 
 ## 与原版 ncdu（C 版 1.22）的对比
 
-下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 50 项、部分实现 4 项、未实现 5 项。
+下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 51 项、部分实现 4 项、未实现 4 项。
 
 ### 数值一致性
 
@@ -130,7 +130,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `-f FILE`（导入扫描结果） | 已实现 | 与 C 版 JSON 互通；`-` 表示 stdin；导入后禁用删除/刷新/shell |
 | `-o FILE`（导出为 JSON） | 已实现 | 与 C 版 JSON 互通；`-` 表示 stdout，重定向时不启界面 |
 | `-e, --extended, --no-extended` | 已实现 | 保存 uid/gid/mode/mtime，导出字段与 C 版逐字节一致；信息框改用 `Mode`/`UID`/`GID`/`Last modified` |
-| `--ignore-config` | 未实现 | 尚无配置文件 |
+| `--ignore-config` | 已实现 | 跳过下面两个配置文件 |
 | `-x, --one-file-system` / `--cross-file-system` | 已实现 | 目录标 `>`，不深入且不计入 |
 | `--exclude PATTERN` / `-X, --exclude-from FILE` | 已实现 | 匹配整条路径与它的每个后缀（`fnmatch` 语义，`*` 跨 `/`）；命中的目录标 `<` 且不深入 |
 | `--exclude-caches` / `--include-caches` | 已实现 | 识别 `CACHEDIR.TAG` 的官方签名 |
@@ -189,7 +189,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | 扫描进度页（当前路径 / 条目数 / 已扫大小 / 可中止） | 支持 | 已实现 |
 | 硬链接去重 | 支持（并标记 `H`） | 支持（Unix；Windows 暂缺，且无标记） |
 | 条目状态标记（`!` `.` `<` `e` `>` `@` `^` `H` `F`） | 9 种，显示在名称前 | 已实现七种：`!`（自己读取失败）、`.`（**后代**中有目录读取失败，尺寸可能不准）、`<`（被排除）、`>`（其它文件系统）、`^`（Linux 伪文件系统）、`e`（空目录）、`@`（非普通文件）。缺 `H`（硬链接已计过，需记账方式对齐）与 `F`（firmlink，需 macOS） |
-| 配置文件（`/etc/ncdu.conf`、`~/.config/ncdu/config`） | 支持 | 未实现 |
+| 配置文件（`/etc/ncdu.conf`、`$XDG_CONFIG_HOME/ncdu/config` 或 `~/.config/ncdu/config`） | 支持 | 已实现：每行一个选项（可含值，如 `--exclude .git`）、`#` 注释、空行忽略、行首 `@` 表示该行允许文件不存在（手册的例子 `@--exclude-from ~/.ncduexcludes`）；**先系统级后用户级**，且**命令行参数优先于配置** |
 | 环境变量 `NCDU_SHELL`、`NCDU_LEVEL` | 支持 | 已实现（`b` 使用；`NCDU_LEVEL` 每次会话递增一次） |
 | 导出 / 导入 JSON | 支持 | 已实现（与 C 版双向互通，见「用法」） |
 | 显示列（图 / 百分比 / itemcount / mtime） | 可自由开关 | 已实现（`--show-*` 开关与 `c`/`m`/`g` 键） |
@@ -380,7 +380,7 @@ cargo check --target x86_64-pc-windows-msvc
 
 1. `--exclude-firmlinks`（macOS 专有，需要在 macOS 上验证）；
 2. `-v`（小写版本快捷方式）与 `--disk-usage` 显式开关；
-3. 配置文件（`/etc/ncdu.conf`、`~/.config/ncdu/config`）与 `--ignore-config`；
+3. 硬链接记账方式对齐 C 版（逐祖先链计数、导出保留每条链接的自身大小），见第 7 条；
 4. Windows 硬链接去重、Windows 隐藏/系统属性过滤；
 5. （可选）内核调用优化：用 `openat`/`fstatat` 或 libc 直调替代 std 的 `statx`；
 6. （可选）arena 垃圾回收（compact），回收删除/刷新留下的不可达节点；

@@ -97,8 +97,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // The command line is expanded first, so short options may be clustered
     // and may carry their value in the same word - both of which the C
     // version's parser accepts ("-1xo-", "-Xpatterns", "--sort=name").
-    let mut args = expand_args(env::args().skip(1).collect()).into_iter();
+    // The config files are read first and their options are put *before* the
+    // command line, so anything given on the command line wins - the same
+    // precedence the C version has.
+    let raw: Vec<String> = env::args().skip(1).collect();
+    let mut all: Vec<String> = Vec::new();
+    if !raw.iter().any(|a| a == "--ignore-config") {
+        for file in config_files() {
+            read_config(&file, &mut all);
+        }
+    }
+    all.extend(raw);
+    let mut args = expand_args(all).into_iter();
     while let Some(arg) = args.next() {
+        // Arguments from a `@` config line tolerate a missing file.
+        let lenient = arg.starts_with(LENIENT);
+        let arg = arg.trim_start_matches(LENIENT).to_string();
         match arg.as_str() {
             "-h" | "--help" => {
                 print!("{}", usage());
@@ -115,10 +129,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             "-X" | "--exclude-from" => {
                 let file = args.next().ok_or("-X requires a file name")?;
-                excludes
-                    .add_file(&file)
-                    .map_err(|e| format!("{file}: {e}"))?;
+                if lenient {
+                    // From a `@` config line: an unreadable file is fine.
+                    let _ = excludes.add_file(&file);
+                } else {
+                    excludes
+                        .add_file(&file)
+                        .map_err(|e| format!("{file}: {e}"))?;
+                }
             }
+            "--ignore-config" => {}
             "-x" | "--one-file-system" => one_file_system = true,
             "--cross-file-system" => one_file_system = false,
             "--exclude-caches" => exclude_caches = true,
@@ -325,6 +345,50 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// Scans without any terminal interaction (used when stdout is redirected).
 /// `--sort COLUMN[-asc|-desc]`. The column names follow the C version
 /// (src/main.c:341): disk-usage, name, apparent-size, itemcount, mtime.
+/// Internal marker for arguments that came from a `@`-prefixed config line:
+/// those tolerate an unreadable file argument (ncdu.1: "ignore error if the
+/// file does not exist"). It never appears on a real command line.
+const LENIENT: char = '\u{1}';
+
+/// The configuration files, in the order they are read - the last one wins:
+/// the system-wide file first, then the user's.
+fn config_files() -> Vec<PathBuf> {
+    let mut files = vec![PathBuf::from("/etc/ncdu.conf")];
+    if let Some(base) = env::var_os("XDG_CONFIG_HOME") {
+        files.push(PathBuf::from(base).join("ncdu/config"));
+    } else if let Some(home) = env::var_os("HOME") {
+        files.push(PathBuf::from(home).join(".config/ncdu/config"));
+    }
+    files
+}
+
+/// Reads a configuration file: one option per line, `#` starts a comment, a
+/// leading `@` makes the line lenient. Missing files are not an error - the
+/// C version silently skips them as well.
+fn read_config(path: &Path, out: &mut Vec<String>) {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (lenient, line) = match line.strip_prefix('@') {
+            Some(rest) => (true, rest.trim()),
+            None => (false, line),
+        };
+        // A line may hold an option and its value ("--exclude .git").
+        for word in line.split_whitespace() {
+            out.push(if lenient {
+                format!("{LENIENT}{word}")
+            } else {
+                word.to_string()
+            });
+        }
+    }
+}
+
 /// Short options that take a value: either the rest of the same word
 /// ("-oFILE", "-o-") or the next argument ("-o FILE").
 const SHORT_WITH_VALUE: [char; 2] = ['o', 'X'];
@@ -742,6 +806,7 @@ Options:
   -x, --one-file-system    Do not cross filesystem boundaries
       --exclude-caches     Skip directories that hold a CACHEDIR.TAG
       --exclude-kernfs     Skip Linux pseudo filesystems (proc, sys, cgroup, ...)
+      --ignore-config      Do not read /etc/ncdu.conf or ~/.config/ncdu/config
   -L, --follow-symlinks    Count a symlink to a file as that file (links to
                            directories are never followed)
   -e, --extended           Collect uid/gid/mode/mtime (enables the mtime
@@ -810,6 +875,40 @@ Notes:
 #[cfg(test)]
 mod tests {
     use super::level_for;
+
+    #[test]
+    fn reads_config_lines() {
+        use super::{LENIENT, read_config};
+
+        let dir = std::env::temp_dir().join(format!("ncdurs-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("config");
+        std::fs::write(
+            &file,
+            "# a comment\n\n-e\n--exclude .git\n@--exclude-from /nonexistent\n",
+        )
+        .unwrap();
+
+        let mut out = Vec::new();
+        read_config(&file, &mut out);
+        assert_eq!(
+            out,
+            vec![
+                "-e".to_string(),
+                "--exclude".to_string(),
+                ".git".to_string(),
+                format!("{LENIENT}--exclude-from"),
+                format!("{LENIENT}/nonexistent"),
+            ]
+        );
+
+        // A missing file is not an error, it simply contributes nothing.
+        let mut out = Vec::new();
+        read_config(&dir.join("does-not-exist"), &mut out);
+        assert!(out.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn expands_short_option_clusters() {

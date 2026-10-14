@@ -81,7 +81,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 
 ## 与原版 ncdu（C 版 1.22）的对比
 
-下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 48 项、部分实现 4 项、未实现 7 项。
+下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 49 项、部分实现 4 项、未实现 6 项。
 
 ### 数值一致性
 
@@ -150,7 +150,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `--show-mtime` / `--hide-mtime` | 已实现 | 依赖 `-e`；`m` 键同样可切换 |
 | `--show-graph` / `--hide-graph` | 已实现 | 与 `--show-percent` 共同构成 0..3 的 `graph` 值（bit 0 = 条形、bit 1 = 百分比），`g` 键循环 |
 | `--show-percent` / `--hide-percent` | 已实现 | 百分比的基准是**当前目录总量**，与条形的"列表最大值"基准不同（同 C 版） |
-| `--graph-style hash\|half-block\|eighth-block` | 未实现 | 固定 `#` 风格；**宽度已自适应**（`max(wincols/7, 10)`） |
+| `--graph-style hash\|half-block\|eighth-block` | 已实现 | 字符表逐字照抄 `browser.c:139`（hash `#` / half-block `▌█` / eighth-block `▏▎▍▌▋▊▉█`）；另外也接受原版那个拼错的 `eigth-block` |
 | `--sort COLUMN` | 已实现 | 取值 `disk-usage`（默认）/ `name` / `apparent-size` / `itemcount` / `mtime`，可加 `-asc` / `-desc` 后缀；`apparent-size` 同时切换大小口径 |
 | `--enable-natsort` / `--disable-natsort` | 已实现 | 关闭后退化为逐字节比较（自然序照 `deps/strnatcmp.c`，默认开启） |
 | `--group-directories-first` / `--no-group-directories-first` | 已实现 | 与 `t` 键等价 |
@@ -188,7 +188,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | --- | --- | --- |
 | 扫描进度页（当前路径 / 条目数 / 已扫大小 / 可中止） | 支持 | 已实现 |
 | 硬链接去重 | 支持（并标记 `H`） | 支持（Unix；Windows 暂缺，且无标记） |
-| 条目状态标记（`!` `.` `<` `e` `>` `@` `^` `H` `F`） | 9 种，显示在名称前 | 已实现 `!`（错误）、`<`（被排除）、`>`（其它文件系统）、`e`（空目录）、`@`（非普通文件）五种；缺 `^`（Linux 伪文件系统，需 `--exclude-kernfs`）、`H`（硬链接，需记账方式对齐）、`F`（firmlink）、`.`（子目录读取错误） |
+| 条目状态标记（`!` `.` `<` `e` `>` `@` `^` `H` `F`） | 9 种，显示在名称前 | 已实现七种：`!`（自己读取失败）、`.`（**后代**中有目录读取失败，尺寸可能不准）、`<`（被排除）、`>`（其它文件系统）、`^`（Linux 伪文件系统）、`e`（空目录）、`@`（非普通文件）。缺 `H`（硬链接已计过，需记账方式对齐）与 `F`（firmlink，需 macOS） |
 | 配置文件（`/etc/ncdu.conf`、`~/.config/ncdu/config`） | 支持 | 未实现 |
 | 环境变量 `NCDU_SHELL`、`NCDU_LEVEL` | 支持 | 已实现（`b` 使用；`NCDU_LEVEL` 每次会话递增一次） |
 | 导出 / 导入 JSON | 支持 | 已实现（与 C 版双向互通，见「用法」） |
@@ -379,7 +379,7 @@ cargo check --target x86_64-pc-windows-msvc
 待实现（按优先级）：
 
 1. `--exclude-firmlinks`（macOS 专有，需要在 macOS 上验证）；
-2. `--graph-style`（half-block / eighth-block）与 `-L` / `--follow-symlinks`；
+2. `-L` / `--follow-symlinks`（改变扫描语义：跟随链接并各自计数）；
 3. 配置文件（`/etc/ncdu.conf`、`~/.config/ncdu/config`）与 `--ignore-config`；
 4. Windows 硬链接去重、Windows 隐藏/系统属性过滤；
 5. （可选）内核调用优化：用 `openat`/`fstatat` 或 libc 直调替代 std 的 `statx`；

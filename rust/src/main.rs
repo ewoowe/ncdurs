@@ -69,6 +69,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut exclude_caches = false;
     let mut exclude_kernfs = false;
     let mut follow_symlinks = false;
+    // Firmlinks are followed by default, like the C version (main.c:45);
+    // only --exclude-firmlinks turns them into 'F' entries.
+    let mut follow_firmlinks = true;
     let mut extended = false;
     let mut show_hidden = true;
     let mut show_mtime = false;
@@ -149,6 +152,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "--include-kernfs" => exclude_kernfs = false,
             "-L" | "--follow-symlinks" => follow_symlinks = true,
             "--no-follow-symlinks" => follow_symlinks = false,
+            "--follow-firmlinks" => follow_firmlinks = true,
+            "--exclude-firmlinks" => follow_firmlinks = false,
             "-e" | "--extended" => extended = true,
             "--no-extended" => extended = false,
             "--show-hidden" => show_hidden = true,
@@ -289,6 +294,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         exclude_caches,
         exclude_kernfs,
         follow_symlinks,
+        follow_firmlinks,
         extended,
     };
 
@@ -824,6 +830,8 @@ Options:
       --ignore-config      Do not read /etc/ncdu.conf or ~/.config/ncdu/config
   -L, --follow-symlinks    Count a symlink to a file as that file (links to
                            directories are never followed)
+      --follow-firmlinks   Follow firmlinks (default, macOS only)
+      --exclude-firmlinks  Do not enter firmlinks, mark them with 'F'
   -e, --extended           Collect uid/gid/mode/mtime (enables the mtime
                            column with 'm' and sorting by it with 'M')
       --show-hidden        Show hidden and excluded entries (default, 'e' key)

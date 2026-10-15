@@ -131,6 +131,8 @@ fn flag_char(n: &Node) -> char {
         '>'
     } else if n.kernfs {
         '^'
+    } else if n.frmlnk {
+        'F'
     } else if n.hlnkc {
         'H'
     } else if n.notreg {

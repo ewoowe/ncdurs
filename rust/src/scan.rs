@@ -79,6 +79,9 @@ pub struct Node {
     pub ino: u64,
     /// st_nlink, written out for hard links.
     pub nlink: u32,
+    /// Reached through a firmlink and left un-entered (`--exclude-firmlinks`,
+    /// macOS); marked 'F'. Unlike kernfs such a directory keeps its own size.
+    pub frmlnk: bool,
     /// Whether this entry contributed to its parent's totals. False for a
     /// repeated hard link: its size is listed and exported, but counted once.
     pub counted: bool,
@@ -128,6 +131,7 @@ impl Tree {
             hlnkc: false,
             ino: 0,
             nlink: 0,
+            frmlnk: false,
             counted: true,
             ext: ExtInfo::default(),
             has_ext: false,
@@ -301,6 +305,8 @@ pub struct ScanOptions {
     pub exclude_kernfs: bool,
     /// `-L`: count a symlink to a file as the file it points at.
     pub follow_symlinks: bool,
+    /// `--follow-firmlinks` (the default) vs `--exclude-firmlinks`, macOS only.
+    pub follow_firmlinks: bool,
     /// `-e`: collect uid/gid/mode/mtime for every entry.
     pub extended: bool,
 }
@@ -410,6 +416,7 @@ impl Scanner {
             hlnkc: false,
             ino: 0,
             nlink: 0,
+            frmlnk: false,
             counted: true,
             ext: root_ext.unwrap_or_default(),
             has_ext: root_ext.is_some(),
@@ -530,6 +537,7 @@ impl Scanner {
                     hlnkc: false,
                     ino: 0,
                     nlink: 0,
+                    frmlnk: false,
                     counted: true,
                     ext: ExtInfo::default(),
                     has_ext: false,
@@ -577,6 +585,7 @@ impl Scanner {
         let mut excluded = parent_excluded;
         let mut othfs = false;
         let mut kernfs = false;
+        let mut frmlnk = false;
         let mut skip_contents = false;
         if !parent_excluded {
             if !self.options.excludes.is_empty() {
@@ -592,7 +601,16 @@ impl Scanner {
                     skip_contents = is_dir;
                 }
             }
-            if is_dir && !excluded {
+            if is_dir && !excluded && !self.options.follow_firmlinks {
+                // macOS: a directory reached through a firmlink. Its own size
+                // still counts (dir_scan.c:133 does not zero FF_FRMLNK), only
+                // the contents are skipped.
+                if platform::is_firmlink(Path::new(self.tree.name_of(name_ref))) {
+                    frmlnk = true;
+                    skip_contents = true;
+                }
+            }
+            if is_dir && !excluded && !skip_contents {
                 if self.options.exclude_kernfs
                     && platform::is_kernfs(Path::new(self.tree.name_of(name_ref)))
                 {
@@ -646,6 +664,7 @@ impl Scanner {
             hlnkc: false,
             ino: 0,
             nlink: 0,
+            frmlnk: false,
             counted: true,
             ext: ext.unwrap_or_default(),
             has_ext: ext.is_some(),
@@ -658,6 +677,7 @@ impl Scanner {
             n.excluded = excluded;
             n.othfs = othfs;
             n.kernfs = kernfs;
+            n.frmlnk = frmlnk;
             n.counted = !dup;
             // Hard link bookkeeping: the C version sets FF_HLNKC for non
             // directories with nlink > 1 and exports ino/hlnkc/nlink for them.
@@ -1134,6 +1154,19 @@ mod tests {
         // the listing shows "0.0 B" rather than the directory block.
         assert_eq!(tree.nodes[git].size, 0);
         assert_eq!(tree.nodes[git].asize, 0);
+    }
+
+    /// Firmlinks only exist on macOS (`--exclude-firmlinks`). On a stock
+    /// install /Users is a firmlinked view of /System/Volumes/Data/Users, while
+    /// /usr sits on the system volume and is a plain directory.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn recognises_firmlinks_on_macos() {
+        use crate::platform::is_firmlink;
+        assert!(is_firmlink(Path::new("/Users")), "/Users is firmlinked");
+        assert!(!is_firmlink(Path::new("/usr")), "/usr is not");
+        // getattrlist() fails on a missing path, which counts as "not one".
+        assert!(!is_firmlink(Path::new("/definitely/not/here")));
     }
 
     #[cfg(unix)]

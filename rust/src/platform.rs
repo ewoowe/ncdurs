@@ -123,6 +123,88 @@ mod imp {
 
 pub use imp::{disk_usage, ext_info, file_id, nlink};
 
+/// True when `path` is reached through a firmlink (`--exclude-firmlinks`,
+/// macOS only).
+///
+/// getattrlist() with ATTR_CMNEXT_NOFIRMLINKPATH hands back the path with
+/// firmlinks left unresolved, so a difference means the path crosses one -
+/// exactly what dir_scan.c:285-302 tests. On a stock macOS 11+ install this
+/// makes /Users, /Applications, /private, ... come back as
+/// /System/Volumes/Data/Users and so on.
+#[cfg(target_os = "macos")]
+pub fn is_firmlink(path: &Path) -> bool {
+    use std::ffi::{CString, OsStr};
+    use std::os::unix::ffi::OsStrExt;
+
+    const ATTR_BIT_MAP_COUNT: u16 = 5;
+    const ATTR_CMNEXT_NOFIRMLINKPATH: u32 = 0x0000_0020;
+
+    #[repr(C)]
+    struct AttrList {
+        bitmapcount: u16,
+        reserved: u16,
+        commonattr: u32,
+        volattr: u32,
+        dirattr: u32,
+        fileattr: u32,
+        forkattr: u32,
+    }
+
+    // The kernel answers with { u_int32_t length; attrreference_t reference;
+    // char extra[] }, and attr_dataoffset is relative to the reference field
+    // itself - which sits 4 bytes into the buffer.
+    unsafe extern "C" {
+        fn getattrlist(
+            path: *const libc::c_char,
+            list: *mut std::ffi::c_void,
+            buf: *mut std::ffi::c_void,
+            size: libc::size_t,
+            options: libc::c_ulong,
+        ) -> libc::c_int;
+    }
+
+    let Ok(cpath) = CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let mut list = AttrList {
+        bitmapcount: ATTR_BIT_MAP_COUNT,
+        reserved: 0,
+        commonattr: 0,
+        volattr: 0,
+        dirattr: 0,
+        fileattr: 0,
+        forkattr: ATTR_CMNEXT_NOFIRMLINKPATH,
+    };
+    let mut buf = [0u8; 4096];
+    let rc = unsafe {
+        getattrlist(
+            cpath.as_ptr(),
+            (&mut list as *mut AttrList).cast(),
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            0,
+        )
+    };
+    if rc != 0 {
+        return false;
+    }
+    let offset = i32::from_ne_bytes(buf[4..8].try_into().unwrap_or([0; 4]));
+    let start = 4usize.wrapping_add(offset.max(0) as usize);
+    if start >= buf.len() {
+        return false;
+    }
+    let tail = &buf[start..];
+    let end = tail.iter().position(|&b| b == 0).unwrap_or(tail.len());
+    let returned = Path::new(OsStr::from_bytes(&tail[..end]));
+    // Compare the raw bytes, not the Paths.
+    returned.as_os_str().as_bytes() != path.as_os_str().as_bytes()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn is_firmlink(_path: &Path) -> bool {
+    false
+}
+
 /// Enables the user's locale, like the C version does before drawing anything.
 /// Without this the thousands separator below would always be the C locale's
 /// empty string and the info window would not match ncdu's output.

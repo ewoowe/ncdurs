@@ -55,9 +55,11 @@ fn write_item<W: Write>(tree: &Tree, idx: usize, out: &mut W) -> io::Result<()> 
 
     // An excluded item carries no sizes at all, only the reason - that is how
     // the C writer marks them: {"name":".git","excluded":"pattern"}.
-    if node.excluded || node.kernfs {
+    if node.excluded || node.kernfs || node.frmlnk {
         if node.kernfs {
             out.write_all(b",\"excluded\":\"kernfs\"")?;
+        } else if node.frmlnk {
+            out.write_all(b",\"excluded\":\"frmlnk\"")?;
         } else if node.othfs {
             // The C writer spells it "otherfs" (dir_export.c:133) - and its
             // importer accepts both that and "othfs".

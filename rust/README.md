@@ -26,6 +26,8 @@
 - [项目结构](#项目结构)
 - [测试](#测试)
 - [已知限制与待实现](#已知限制与待实现)
+- [附录：完整选项与按键对照](#附录完整选项与按键对照)
+- [附录：验证方法](#附录验证方法)
 - [许可](#许可)
 
 ## 构建与运行
@@ -125,66 +127,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 
 我们的导出文件与 C 版**逐字节一致**：同一目录下 `ncdurs -o` 与 `ncdu -o -` 的输出，去掉 `progname`/`progver`/`timestamp` 与 `dev` 后 diff 为空（`dev` 是我们有意不保存的字段）。符号链接等「非普通文件」的 `notreg`、`read_error`、`excluded` 的三种取值（`pattern`/`otherfs`/`kernfs`）、硬链接的 `ino`/`hlnkc`/`nlink`、扩展信息（`-e` 的 `uid`/`gid`/`mode`/`mtime`）、字符串转义、零值字段省略都已对齐（验证方法见「测试」一节）。
 
-### 命令行选项
-
-| 选项（原版） | ncdurs | 备注 |
-| --- | --- | --- |
-| `-h, --help` | 已实现 | |
-| `-v, -V, --version` | 已实现 | `-v` 与 `-V` / `--version` 是同义词（`main.c:434`） |
-| `-f FILE`（导入扫描结果） | 已实现 | 与 C 版 JSON 互通；`-` 表示 stdin；导入后禁用删除/刷新/shell |
-| `-o FILE`（导出为 JSON） | 已实现 | 与 C 版 JSON 互通；`-` 表示 stdout，重定向时不启界面 |
-| `-e, --extended, --no-extended` | 已实现 | 保存 uid/gid/mode/mtime，导出字段与 C 版逐字节一致；信息框改用 `Mode`/`UID`/`GID`/`Last modified` |
-| `--ignore-config` | 已实现 | 跳过下面两个配置文件 |
-| `-x, --one-file-system` / `--cross-file-system` | 已实现 | 目录标 `>`，不深入且不计入 |
-| `--exclude PATTERN` / `-X, --exclude-from FILE` | 已实现 | 匹配整条路径与它的每个后缀（`fnmatch` 语义，`*` 跨 `/`）；命中的目录标 `<` 且不深入 |
-| `--exclude-caches` / `--include-caches` | 已实现 | 识别 `CACHEDIR.TAG` 的官方签名 |
-| `-L, --follow-symlinks` / `--no-follow-symlinks` | 已实现 | 指向**文件**的链接按目标计数（且不再是 `@`）；指向**目录**的链接永不跟随 —— 与 C 版逐字节一致 |
-| `--exclude-kernfs` / `--include-kernfs` | 已实现 | Linux：用 `statfs` 的 `f_type` 比对 12 个伪文件系统 magic（proc/sys/cgroup/cgroup2/debug/devpts/binfmt/bpf/pstore/security/selinux/trace）；不入内、不计入、标 `^`，导出 `"excluded":"kernfs"`（实测与 C 版逐字段一致） |
-| `--exclude-firmlinks` / `--follow-firmlinks`（macOS） | 已实现 | 用 `getattrlist(ATTR_CMNEXT_NOFIRMLINKPATH)` 返回的路径与传入路径比较来判断；命中时不进入、标 `F`，但**保留自身大小**（`dir_scan.c:133` 的归零列表不含 `FF_FRMLNK`）；默认**跟随**（`main.c:45`），所以只有显式开启才出现 `F` |
-| `-0` / `-1` / `-2`（UI 级别） | 已实现 | `-0` 扫描期间完全不绘制（实测：默认输出 5161 字节 vs `-0` 的 36 字节）；`-1` 输出纯文本进度行到 **stderr**（路径 + 文件数 + 累计尺寸，`\r` 覆盖同一行，所以 stdout 仍是干净的 JSON），`-2` 走全屏界面 |
-| `-q, --slow-ui-updates` / `--fast-ui-updates` | 已实现 | 刷新间隔 2 s ↔ 50 ms |
-| `--enable-shell` / `--disable-shell` | 已实现 | 门控 `b` 键，禁用时弹 `Shell feature disabled.` |
-| `--enable-delete` / `--disable-delete` | 已实现 | 门控 `d` 键，禁用时弹 `Deletion feature disabled.` |
-| `--enable-refresh` / `--disable-refresh` | 已实现 | 门控 `r` 键，禁用时弹 `Directory refresh feature disabled.` |
-| `-r` / `-rr`（只读） | 已实现 | `-r` = `--disable-delete`；`-rr` 再加 `--disable-shell`（同手册）；导入的树本就只读 |
-| `--si` / `--no-si` | 已实现 | 十进制（kB/MB）与二进制（KiB/MiB）单位切换 |
-| `-a, --apparent-size` / `--disk-usage` | 已实现 | 两个方向都有显式开关（默认磁盘占用） |
-| `--show-hidden` / `--hide-hidden` | 已实现 | 隐藏点文件、`~` 结尾的备份文件与被排除项（`e` 键同）；只影响列表，不影响尺寸 |
-| `--show-itemcount` / `--hide-itemcount` | 已实现 | 7 列宽的 itemcount 列，`c` 键同；格式照 `browse_draw_items`（千位分隔 / k / M / `> 1B`） |
-| `--show-mtime` / `--hide-mtime` | 已实现 | 依赖 `-e`；`m` 键同样可切换 |
-| `--show-graph` / `--hide-graph` | 已实现 | 与 `--show-percent` 共同构成 0..3 的 `graph` 值（bit 0 = 条形、bit 1 = 百分比），`g` 键循环 |
-| `--show-percent` / `--hide-percent` | 已实现 | 百分比的基准是**当前目录总量**，与条形的"列表最大值"基准不同（同 C 版） |
-| `--graph-style hash\|half-block\|eighth-block` | 已实现 | 字符表逐字照抄 `browser.c:139`（hash `#` / half-block `▌█` / eighth-block `▏▎▍▌▋▊▉█`）；另外也接受原版那个拼错的 `eigth-block` |
-| `--sort COLUMN` | 已实现 | 取值 `disk-usage`（默认）/ `name` / `apparent-size` / `itemcount` / `mtime`，可加 `-asc` / `-desc` 后缀；`apparent-size` 同时切换大小口径 |
-| `--enable-natsort` / `--disable-natsort` | 已实现 | 关闭后退化为逐字节比较（自然序照 `deps/strnatcmp.c`，默认开启） |
-| `--group-directories-first` / `--no-group-directories-first` | 已实现 | 与 `t` 键等价 |
-| `--confirm-quit` / `--no-confirm-quit` | 已实现 | 弹出 `ncdu confirm quit` 窗口（`Really quit? (y/N)`），照 `src/quit.c` |
-| `--confirm-delete` / `--no-confirm-delete` | 已实现 | 控制删除确认（含"don't ask me again"），与 `d` 键同一状态 |
-| `--color off\|dark\|dark-bg` | 已实现 | 三套主题逐槽照抄 `src/util.h` 的 `UI_COLORS`；另加原版没有的 `auto` 并作为默认（`NO_COLOR` 已设置、或 `TERM` 为空 / `dumb` 时回退 `off`，否则用 `dark`） |
-
-### 界面按键
-
-| 按键（原版） | 功能 | ncdurs |
-| --- | --- | --- |
-| `↑`/`k`、`↓`/`j` | 移动光标 | 已实现（另有 PgUp / PgDn、g / G、Home / End） |
-| `→`/`Enter` | 进入目录 | 已实现（另有 `l`） |
-| `←`/`<`/`h` | 返回上级 | 部分：`←` / `u` / `Backspace`（原版用 `<` / `h`） |
-| `n` / `s` / `C` | 按名称 / 大小 / items 排序 | 已实现（同键再按一次反向） |
-| `M` | 按 mtime 排序 | 已实现（`-e` 下可用，比较链 `mtime → size → name → items`） |
-| `t` | 排序时目录优先 | 已实现（判断在降序反转之前，所以升序降序都是目录在前） |
-| `g` | 显示百分比 / 图形 | 已实现（0..3 循环：无 / 条形 / 百分比 / 两者） |
-| `c` | 显示 itemcount 列 | 已实现 |
-| `m` | 显示 mtime 列（需 `-e`） | 已实现 |
-| `e` | 显示 / 隐藏隐藏项 | 已实现（点文件、`~` 备份、被排除项；不影响尺寸） |
-| `a` | 切换表观大小 / 磁盘占用 | 已实现 |
-| `i` | 显示选中项信息 | 已实现（`-e` 时含 `Mode`/`UID`/`GID`/`Last modified`） |
-| `r` | 重算当前目录 | 已实现（重扫后替换该目录的子树） |
-| `b` | 在当前目录开 shell | 已实现（`NCDU_SHELL` → `$SHELL` → `/bin/sh`，经 shell 解析，可带参数） |
-| `d` | 删除选中项 | 已实现（先弹 `y`/`n` 确认；目录按递归删除） |
-| `i` | 显示选中项信息 | 已实现（`Name`/`Path`/`Type`/`Disk usage`/`Apparent size`，再按 `i` 关闭） |
-| `?` | 帮助页 | 已实现（三页 `1:Keys` / `2:Format` / `3:About`，方向键与 PgUp / PgDn 滚动） |
-| `q` | 退出 | 已实现（另有 `Esc` / `Ctrl-C`） |
-| `q`（扫描期间） | 中止扫描 | 已实现 |
+完整的选项与按键对照见文末的[附录](#附录完整选项与按键对照)。
 
 ### 其他特性
 
@@ -307,6 +250,93 @@ ncdurs-0.2.0-x86_64-pc-windows-msvc.zip
 
 两点说明：Linux 产物是动态链接 glibc 的，目标机器 glibc 太旧时自行 `cargo build --release`；Windows 的硬链接去重尚未实现（见上文），扫码结果会比 Linux 略大。
 
+验证方法的细节见文末的[附录：验证方法](#附录验证方法)。
+
+## 已知限制与待实现
+
+现状：
+
+- 扫描性能与 C 版同一量级（`/usr`、50 万条目上约 1.09 倍，见上表），内存占用略低；
+- 遍历使用 `chdir`（进程全局状态），同一时间请只运行一个扫描实例；
+- 删除与刷新只在内存树里「摘链 / 替换子树」，被移除的旧节点留在 arena 中成为不可达垃圾（不回收），反复大量操作会让内存缓慢增长；
+- 删除是直接 `unlink` / 递归 `rmdir`，没有回收站语义，确认后立即生效；
+
+- 颜色输出与 C 版**逐字节一致**：颜色写成经典 8 色 SGR（`33`/`46`/`42`…）而不是 crossterm 默认的 256 色语法（`38;5;3`）—— 见 `src/backend.rs`。这一点很重要：256 色表的前 16 项**是否**映射到终端自己的调色板由终端决定，某些主题会按固定色表渲染 `38;5;3`，于是 dark 主题看起来与原版不同；用经典色码则始终跟随终端配色；
+- 界面已按原版对齐（列布局、底栏、扫描页/消息/确认框的居中窗口、`..` 项、帮助页、信息框），但有几个标记还画不出来：`<`（被排除项）、`>`（其它文件系统）、`^`（Linux 伪文件系统）、`F`（firmlink）需要对应的扫描选项，`H`（硬链接已计过）与 `.`（后代读取失败）都已实现，现在 9 种里已实现 8 种。
+
+待实现（按优先级）：
+
+1. （可选）arena 垃圾回收（compact），回收删除/刷新留下的不可达节点。
+
+**已评估、不再列入待办（2026-10-15）**：内核调用优化 —— 即"用 `openat`/`fstatat` 替代 std 的路径解析"。`strace -c` 显示我们的 `statx` 调用次数与 C 版的 `newfstatat` **逐次相同**（`/usr/lib` 上 70169 对 70168），其余调用（`getdents64` / `chdir` / `openat` / `fstat`）也一一对应，所以这条路上没有可优化空间。当时观察到的约 32% 差距实际来自**导出到 stdout 时没有缓冲**（每个字段一次 `write`，共 70169 次，而 C 版走 stdio 只有 976 次），已改为 `BufWriter`（降到 912 次，syscall 总数与 C 版持平），差距随之降到约 9%；余下的部分在用户态的分配与数据结构，收益有限、改动风险不小，暂不做。
+
+## 附录：完整选项与按键对照
+
+逐项与 `ncdu.1` 手册核对的结果。
+
+### 命令行选项
+
+| 选项（原版） | ncdurs | 备注 |
+| --- | --- | --- |
+| `-h, --help` | 已实现 | |
+| `-v, -V, --version` | 已实现 | `-v` 与 `-V` / `--version` 是同义词（`main.c:434`） |
+| `-f FILE`（导入扫描结果） | 已实现 | 与 C 版 JSON 互通；`-` 表示 stdin；导入后禁用删除/刷新/shell |
+| `-o FILE`（导出为 JSON） | 已实现 | 与 C 版 JSON 互通；`-` 表示 stdout，重定向时不启界面 |
+| `-e, --extended, --no-extended` | 已实现 | 保存 uid/gid/mode/mtime，导出字段与 C 版逐字节一致；信息框改用 `Mode`/`UID`/`GID`/`Last modified` |
+| `--ignore-config` | 已实现 | 跳过下面两个配置文件 |
+| `-x, --one-file-system` / `--cross-file-system` | 已实现 | 目录标 `>`，不深入且不计入 |
+| `--exclude PATTERN` / `-X, --exclude-from FILE` | 已实现 | 匹配整条路径与它的每个后缀（`fnmatch` 语义，`*` 跨 `/`）；命中的目录标 `<` 且不深入 |
+| `--exclude-caches` / `--include-caches` | 已实现 | 识别 `CACHEDIR.TAG` 的官方签名 |
+| `-L, --follow-symlinks` / `--no-follow-symlinks` | 已实现 | 指向**文件**的链接按目标计数（且不再是 `@`）；指向**目录**的链接永不跟随 —— 与 C 版逐字节一致 |
+| `--exclude-kernfs` / `--include-kernfs` | 已实现 | Linux：用 `statfs` 的 `f_type` 比对 12 个伪文件系统 magic（proc/sys/cgroup/cgroup2/debug/devpts/binfmt/bpf/pstore/security/selinux/trace）；不入内、不计入、标 `^`，导出 `"excluded":"kernfs"`（实测与 C 版逐字段一致） |
+| `--exclude-firmlinks` / `--follow-firmlinks`（macOS） | 已实现 | 用 `getattrlist(ATTR_CMNEXT_NOFIRMLINKPATH)` 返回的路径与传入路径比较来判断；命中时不进入、标 `F`，但**保留自身大小**（`dir_scan.c:133` 的归零列表不含 `FF_FRMLNK`）；默认**跟随**（`main.c:45`），所以只有显式开启才出现 `F` |
+| `-0` / `-1` / `-2`（UI 级别） | 已实现 | `-0` 扫描期间完全不绘制（实测：默认输出 5161 字节 vs `-0` 的 36 字节）；`-1` 输出纯文本进度行到 **stderr**（路径 + 文件数 + 累计尺寸，`\r` 覆盖同一行，所以 stdout 仍是干净的 JSON），`-2` 走全屏界面 |
+| `-q, --slow-ui-updates` / `--fast-ui-updates` | 已实现 | 刷新间隔 2 s ↔ 50 ms |
+| `--enable-shell` / `--disable-shell` | 已实现 | 门控 `b` 键，禁用时弹 `Shell feature disabled.` |
+| `--enable-delete` / `--disable-delete` | 已实现 | 门控 `d` 键，禁用时弹 `Deletion feature disabled.` |
+| `--enable-refresh` / `--disable-refresh` | 已实现 | 门控 `r` 键，禁用时弹 `Directory refresh feature disabled.` |
+| `-r` / `-rr`（只读） | 已实现 | `-r` = `--disable-delete`；`-rr` 再加 `--disable-shell`（同手册）；导入的树本就只读 |
+| `--si` / `--no-si` | 已实现 | 十进制（kB/MB）与二进制（KiB/MiB）单位切换 |
+| `-a, --apparent-size` / `--disk-usage` | 已实现 | 两个方向都有显式开关（默认磁盘占用） |
+| `--show-hidden` / `--hide-hidden` | 已实现 | 隐藏点文件、`~` 结尾的备份文件与被排除项（`e` 键同）；只影响列表，不影响尺寸 |
+| `--show-itemcount` / `--hide-itemcount` | 已实现 | 7 列宽的 itemcount 列，`c` 键同；格式照 `browse_draw_items`（千位分隔 / k / M / `> 1B`） |
+| `--show-mtime` / `--hide-mtime` | 已实现 | 依赖 `-e`；`m` 键同样可切换 |
+| `--show-graph` / `--hide-graph` | 已实现 | 与 `--show-percent` 共同构成 0..3 的 `graph` 值（bit 0 = 条形、bit 1 = 百分比），`g` 键循环 |
+| `--show-percent` / `--hide-percent` | 已实现 | 百分比的基准是**当前目录总量**，与条形的"列表最大值"基准不同（同 C 版） |
+| `--graph-style hash\|half-block\|eighth-block` | 已实现 | 字符表逐字照抄 `browser.c:139`（hash `#` / half-block `▌█` / eighth-block `▏▎▍▌▋▊▉█`）；另外也接受原版那个拼错的 `eigth-block` |
+| `--sort COLUMN` | 已实现 | 取值 `disk-usage`（默认）/ `name` / `apparent-size` / `itemcount` / `mtime`，可加 `-asc` / `-desc` 后缀；`apparent-size` 同时切换大小口径 |
+| `--enable-natsort` / `--disable-natsort` | 已实现 | 关闭后退化为逐字节比较（自然序照 `deps/strnatcmp.c`，默认开启） |
+| `--group-directories-first` / `--no-group-directories-first` | 已实现 | 与 `t` 键等价 |
+| `--confirm-quit` / `--no-confirm-quit` | 已实现 | 弹出 `ncdu confirm quit` 窗口（`Really quit? (y/N)`），照 `src/quit.c` |
+| `--confirm-delete` / `--no-confirm-delete` | 已实现 | 控制删除确认（含"don't ask me again"），与 `d` 键同一状态 |
+| `--color off\|dark\|dark-bg` | 已实现 | 三套主题逐槽照抄 `src/util.h` 的 `UI_COLORS`；另加原版没有的 `auto` 并作为默认（`NO_COLOR` 已设置、或 `TERM` 为空 / `dumb` 时回退 `off`，否则用 `dark`） |
+
+### 界面按键
+
+| 按键（原版） | 功能 | ncdurs |
+| --- | --- | --- |
+| `↑`/`k`、`↓`/`j` | 移动光标 | 已实现（另有 PgUp / PgDn、g / G、Home / End） |
+| `→`/`Enter` | 进入目录 | 已实现（另有 `l`） |
+| `←`/`<`/`h` | 返回上级 | 部分：`←` / `u` / `Backspace`（原版用 `<` / `h`） |
+| `n` / `s` / `C` | 按名称 / 大小 / items 排序 | 已实现（同键再按一次反向） |
+| `M` | 按 mtime 排序 | 已实现（`-e` 下可用，比较链 `mtime → size → name → items`） |
+| `t` | 排序时目录优先 | 已实现（判断在降序反转之前，所以升序降序都是目录在前） |
+| `g` | 显示百分比 / 图形 | 已实现（0..3 循环：无 / 条形 / 百分比 / 两者） |
+| `c` | 显示 itemcount 列 | 已实现 |
+| `m` | 显示 mtime 列（需 `-e`） | 已实现 |
+| `e` | 显示 / 隐藏隐藏项 | 已实现（点文件、`~` 备份、被排除项；不影响尺寸） |
+| `a` | 切换表观大小 / 磁盘占用 | 已实现 |
+| `i` | 显示选中项信息 | 已实现（`-e` 时含 `Mode`/`UID`/`GID`/`Last modified`） |
+| `r` | 重算当前目录 | 已实现（重扫后替换该目录的子树） |
+| `b` | 在当前目录开 shell | 已实现（`NCDU_SHELL` → `$SHELL` → `/bin/sh`，经 shell 解析，可带参数） |
+| `d` | 删除选中项 | 已实现（先弹 `y`/`n` 确认；目录按递归删除） |
+| `i` | 显示选中项信息 | 已实现（`Name`/`Path`/`Type`/`Disk usage`/`Apparent size`，再按 `i` 关闭） |
+| `?` | 帮助页 | 已实现（三页 `1:Keys` / `2:Format` / `3:About`，方向键与 PgUp / PgDn 滚动） |
+| `q` | 退出 | 已实现（另有 `Esc` / `Ctrl-C`） |
+| `q`（扫描期间） | 中止扫描 | 已实现 |
+
+## 附录：验证方法
+
 ### 导出文件逐字节对照
 
 想确认"两边导出的 JSON 是不是一模一样"，用规范化后的 diff（元数据与 `dev` 字段先去掉；`dev` 我们暂不保存）：
@@ -371,24 +401,6 @@ rustup target add x86_64-pc-windows-msvc x86_64-pc-windows-gnu \
     x86_64-apple-darwin aarch64-apple-darwin x86_64-unknown-freebsd
 cargo check --target x86_64-pc-windows-msvc
 ```
-
-## 已知限制与待实现
-
-现状：
-
-- 扫描性能与 C 版同一量级（`/usr`、50 万条目上约 1.09 倍，见上表），内存占用略低；
-- 遍历使用 `chdir`（进程全局状态），同一时间请只运行一个扫描实例；
-- 删除与刷新只在内存树里「摘链 / 替换子树」，被移除的旧节点留在 arena 中成为不可达垃圾（不回收），反复大量操作会让内存缓慢增长；
-- 删除是直接 `unlink` / 递归 `rmdir`，没有回收站语义，确认后立即生效；
-
-- 颜色输出与 C 版**逐字节一致**：颜色写成经典 8 色 SGR（`33`/`46`/`42`…）而不是 crossterm 默认的 256 色语法（`38;5;3`）—— 见 `src/backend.rs`。这一点很重要：256 色表的前 16 项**是否**映射到终端自己的调色板由终端决定，某些主题会按固定色表渲染 `38;5;3`，于是 dark 主题看起来与原版不同；用经典色码则始终跟随终端配色；
-- 界面已按原版对齐（列布局、底栏、扫描页/消息/确认框的居中窗口、`..` 项、帮助页、信息框），但有几个标记还画不出来：`<`（被排除项）、`>`（其它文件系统）、`^`（Linux 伪文件系统）、`F`（firmlink）需要对应的扫描选项，`H`（硬链接已计过）与 `.`（后代读取失败）都已实现，现在 9 种里已实现 8 种。
-
-待实现（按优先级）：
-
-1. （可选）arena 垃圾回收（compact），回收删除/刷新留下的不可达节点。
-
-**已评估、不再列入待办（2026-10-15）**：内核调用优化 —— 即"用 `openat`/`fstatat` 替代 std 的路径解析"。`strace -c` 显示我们的 `statx` 调用次数与 C 版的 `newfstatat` **逐次相同**（`/usr/lib` 上 70169 对 70168），其余调用（`getdents64` / `chdir` / `openat` / `fstat`）也一一对应，所以这条路上没有可优化空间。当时观察到的约 32% 差距实际来自**导出到 stdout 时没有缓冲**（每个字段一次 `write`，共 70169 次，而 C 版走 stdio 只有 976 次），已改为 `BufWriter`（降到 912 次，syscall 总数与 C 版持平），差距随之降到约 9%；余下的部分在用户态的分配与数据结构，收益有限、改动风险不小，暂不做。
 
 ## 许可
 

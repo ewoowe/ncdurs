@@ -294,7 +294,8 @@ pub struct Progress {
 }
 
 /// What the scanner should leave out (`--exclude`, `-x`, `--exclude-caches`).
-#[derive(Default, Clone)]
+/// `Default` is written out by hand because `follow_firmlinks` starts as true.
+#[derive(Clone)]
 pub struct ScanOptions {
     pub excludes: Excludes,
     /// `-x`: do not cross filesystem boundaries.
@@ -307,6 +308,22 @@ pub struct ScanOptions {
     pub follow_symlinks: bool,
     /// `--follow-firmlinks` (the default) vs `--exclude-firmlinks`, macOS only.
     pub follow_firmlinks: bool,
+}
+
+impl Default for ScanOptions {
+    fn default() -> ScanOptions {
+        ScanOptions {
+            excludes: Excludes::default(),
+            one_file_system: false,
+            exclude_caches: false,
+            follow_symlinks: false,
+            // Firmlinks are followed unless asked otherwise (main.c:45). Deriving
+            // Default would set this to false, which on macOS turns every path
+            // below a firmlink (/private, /Users, ...) into a skipped directory.
+            follow_firmlinks: true,
+            extended: false,
+        }
+    }
     /// `-e`: collect uid/gid/mode/mtime for every entry.
     pub extended: bool,
 }

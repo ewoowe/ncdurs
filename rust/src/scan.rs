@@ -1159,17 +1159,39 @@ mod tests {
         assert_eq!(tree.nodes[git].asize, 0);
     }
 
-    /// Firmlinks only exist on macOS (`--exclude-firmlinks`). On a stock
-    /// install /Users is a firmlinked view of /System/Volumes/Data/Users, while
-    /// /usr sits on the system volume and is a plain directory.
+    /// Firmlinks only exist on macOS (`--exclude-firmlinks`).
+    ///
+    /// macOS 11+ puts several system paths behind firmlinks onto the data
+    /// volume; the list below is Apple's. Rather than insisting on one exact
+    /// path (the layout has changed between releases), the test probes them all
+    /// and reports what getattrlist() actually answered when none is found -
+    /// which is the diagnostic needed if the detection itself is broken.
     #[cfg(target_os = "macos")]
     #[test]
     fn recognises_firmlinks_on_macos() {
         use crate::platform::is_firmlink;
-        assert!(is_firmlink(Path::new("/Users")), "/Users is firmlinked");
-        assert!(!is_firmlink(Path::new("/usr")), "/usr is not");
-        // getattrlist() fails on a missing path, which counts as "not one".
-        assert!(!is_firmlink(Path::new("/definitely/not/here")));
+
+        // /usr sits on the system volume and is never a firmlink.
+        assert!(!is_firmlink(Path::new("/usr")), "/usr is not a firmlink");
+        // A missing path makes getattrlist() fail, which counts as "not one".
+        assert!(
+            !is_firmlink(Path::new("/definitely/not/here")),
+            "a missing path is not a firmlink"
+        );
+
+        let probes = ["/Users", "/Applications", "/private", "/opt", "/usr/local"];
+        let mut report = String::new();
+        let mut hits = 0;
+        for p in probes {
+            let yes = is_firmlink(Path::new(p));
+            hits += usize::from(yes);
+            report.push_str(&format!("\n  {p} -> {yes}"));
+        }
+        assert!(
+            hits > 0,
+            "none of the known firmlink paths was recognised, so getattrlist() \
+             probably failed:{report}"
+        );
     }
 
     #[cfg(unix)]

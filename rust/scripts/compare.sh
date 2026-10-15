@@ -165,16 +165,46 @@ metric() {
 # 从导出文件里算出总量：`export_value <file> dsize|asize|items`。
 #
 # 导出里没有"总量"字段 —— 每个条目（包括根目录）写的是它**自身**的大小，
-# 所以总量要**累加**全部条目。硬链接已经去重，因此累加值就是界面底栏和
-# `du` 看到的那个总量。这是数值对比的数据来源：确定性，不受渲染方式或
-# 扫描快慢影响。
+# 而且每条硬链接都带着自己的大小，所以总量要**累加**、并且**按 inode 去重**
+# （界面底栏和 `du` 都是去重的口径）。这是数值对比的数据来源：确定性，
+# 不受渲染方式或扫描快慢影响。
 export_value() {
-  local f="$1" key="$2"
-  case "$key" in
-    dsize) grep -aoE '"dsize":[0-9]+' "$f" | grep -aoE '[0-9]+$' | awk '{s += $1} END {print s + 0}' ;;
-    asize) grep -aoE '"asize":[0-9]+' "$f" | grep -aoE '[0-9]+$' | awk '{s += $1} END {print s + 0}' ;;
-    items) grep -ao '"name"' "$f" | wc -l ;;
-  esac
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+
+path, key = sys.argv[1], sys.argv[2]
+with open(path, 'rb') as fh:
+    doc = json.load(fh)
+# The export is [major, minor, metadata, tree].
+tree = doc[3]
+
+seen = set()
+total = 0
+count = 0
+
+
+def walk(nodes):
+    """Counts this level, then recurses into nested levels."""
+    global total, count
+    for node in nodes:
+        if not isinstance(node, dict) or 'name' not in node:
+            continue
+        count += 1
+        ino = node.get('ino')
+        if ino is not None:
+            if ino in seen:
+                # A repeated hard link: listed, but counted only once.
+                continue
+            seen.add(ino)
+        total += node.get(key, 0)
+    for node in nodes:
+        if isinstance(node, list):
+            walk(node)
+
+
+walk(tree)
+print(count if key == 'items' else total)
+PY
 }
 
 # du 的 disk usage（字节）：块数 × 512，与 ncdu 的 dsize 口径一致

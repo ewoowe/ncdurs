@@ -33,7 +33,7 @@ TERM_VAL="${TERM:-xterm-256color}"
 
 # 扫描超过这个时间（秒）就被中止，避免脚本挂死；大目录请调大
 SCAN_TIMEOUT_S=60
-POLL_STEPS=$((SCAN_TIMEOUT_S * 50))   # 每次 sleep 0.02s
+POLL_STEPS=$((SCAN_TIMEOUT_S * 20))   # 每次 sleep 0.05s
 
 DIR="/usr"
 RUNS=2
@@ -114,18 +114,26 @@ echo "  Rust 版: $RUST_BIN"
 
 # ------------------------------------------------------------ 通用小工具
 
-# 在临时 pty 中运行一次 TUI，进入浏览界面后立刻发 q 退出。
+# 在临时 pty 中运行一次 TUI，进入浏览界面后发 q 退出。
 # run_tui <bin> <dir> <outfile> <errfile>
+#
+# 这里等的是一个固定时间，而不是"界面出现"的某种信号，两个原因：
+#
+#   * 界面文本不能用：ncdurs 在每个 cell 之前都发一次光标定位，输出里没有
+#     连续的 "Apparent size" 可以匹配（C 版用 ncurses，连续输出，能匹配）。
+#     早先的 grep 判据对 ncdurs 永不命中，每次都白等到超时 —— 三个用例目录
+#     就浪费了 180 秒。
+#   * "输出稳定"也不行：正因为逐 cell 定位，ncdurs 每帧要写约 50 KB，而且
+#     扫描页有动画，输出一直在增长，判据同样永不满足。
+#
+# 固定等待是安全的：给的目录都是小目录，1 秒足够画完；万一还在扫描，'q' 在
+# 扫描页正是"中止"键，程序会立刻退出，不会挂住。
+TUI_WAIT_S=${TUI_WAIT_S:-1}
+
 run_tui() {
   local bin="$1" dir="$2" out="$3" err="$4"
   rm -f "$out" "$err"
-  # 用 "Apparent"（只在浏览界面出现的字样）判断扫描已完成。
-  # 不要用图形列的 '#'：扫描页的进度条里也会有 '#'，会被提前命中。
-  ( i=0
-    while ! grep -aq 'Apparent' "$out" 2>/dev/null && [ "$i" -lt "$POLL_STEPS" ]; do
-      sleep 0.02; i=$((i + 1))
-    done
-    printf 'q' ) \
+  ( sleep "$TUI_WAIT_S"; printf 'q' ) \
     | TERM="$TERM_VAL" script -qefc "stty rows 40 cols 130; $bin $(printf '%q' "$dir")" /dev/null \
         >"$out" 2>"$err"
 }

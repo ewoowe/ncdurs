@@ -313,9 +313,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let entries = tree.nodes.len();
         if file == Path::new("-") {
             // Buffered: without it every field of every entry becomes its own
-        // write() syscall (measured: 70169 writes for /usr/lib, against 976
-        // for the C version, which buffers through stdio).
-        let mut out = io::BufWriter::new(io::stdout().lock());
+            // write() syscall (measured: 70169 writes for /usr/lib, against 976
+            // for the C version, which buffers through stdio).
+            let mut out = io::BufWriter::new(io::stdout().lock());
             export::write(&tree, &mut out).map_err(|e| format!("stdout: {e}"))?;
             out.flush()?;
         } else {

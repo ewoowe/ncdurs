@@ -334,7 +334,6 @@ assert_eq!(buffer.cell((79, 0)).unwrap().style().bg, app.colors.hd.bg);
 **2. 同尺寸抓两版首帧后精确计数** —— 适合与 C 版对照"格数、字符数"这类量：
 
 ```bash
-cd /media/wangcheng/WorkSpace/VSCode/ncdu-official/ncdu
 for v in ./ncdu ./rust/target/release/ncdurs; do
   { sleep 1.7; printf 'q'; sleep 0.3; } | timeout 9 env TERM=xterm-256color script -qefc \
     "stty rows 28 cols 110; $v /some/dir" /dev/null > /tmp/$(basename "$v").raw

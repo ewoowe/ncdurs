@@ -39,7 +39,7 @@ jobs:
       run:
         working-directory: rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -62,9 +62,9 @@ jobs:
       run:
         working-directory: rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: install build tools and ncurses headers
-        run: sudo apt-get update && sudo apt-get install -y libncurses-dev autoconf automake
+        run: sudo apt-get update && sudo apt-get install -y libncurses-dev autoconf automake ccache
       # A fresh checkout only carries configure.ac and Makefile.am (configure,
       # Makefile.in and aclocal.m4 are gitignored), so autotools have to build
       # the build system first. Caching it *together with the object files*
@@ -72,8 +72,12 @@ jobs:
       # covers the sources, so a change recompiles exactly what make considers
       # stale, and an unchanged tree is not compiled at all.
       - name: cache the C build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
+          # The object files are deliberately *not* cached: a fresh checkout
+          # stamps the sources with the current time, so make would rebuild
+          # everything anyway. ccache keys on content instead, which is what
+          # actually makes this job fast.
           path: |
             configure
             aclocal.m4
@@ -86,7 +90,7 @@ jobs:
             depcomp
             install-sh
             missing
-            src/*.o
+            ~/.ccache
           key: c-build-${{ runner.os }}-${{ hashFiles('configure.ac', 'Makefile.am', 'src/**') }}
           restore-keys: |
             c-build-${{ runner.os }}-
@@ -100,7 +104,7 @@ jobs:
           if [ ! -x ./configure ] || [ ! -f ./install-sh ]; then
             autoreconf -i
           fi
-          ./configure
+          CC="ccache cc" ./configure
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -126,7 +130,7 @@ jobs:
       run:
         working-directory: rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # let-chains (edition 2024) need 1.88.
       - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2

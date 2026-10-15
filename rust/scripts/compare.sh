@@ -220,7 +220,7 @@ mkdir -p "$CASE/sub" "$CASE/empty" "$CASE/secret"
 dd if=/dev/zero of="$CASE/sub/f1" bs=1M count=10 status=none
 ln "$CASE/sub/f1" "$CASE/sub/f2"          # 硬链接：两边都应只计一次
 head -c 1 /dev/zero >"$CASE/tiny"         # 1 字节文件
-truncate -s 1G "$CASE/sparse"             # 稀疏文件：disk 应远小于 apparent
+truncate -s 64M "$CASE/sparse"             # 稀疏文件：disk 应远小于 apparent
 ln -s "$CASE" "$CASE/loop"                # 指向自身的符号链接：不应跟随
 echo hidden >"$CASE/secret/h"
 chmod 000 "$CASE/secret"                  # 无权限目录：应报错但继续

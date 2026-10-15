@@ -90,13 +90,9 @@ mod imp {
         ((high as u64) << 32) | low as u64
     }
 
-    /// Hard link de-duplication is not implemented on Windows yet: std does not
-    /// expose the file index / link count (still unstable, rust#63010), and
-    /// getting them through the Win32 API requires opening a handle for every
-    /// single entry, which is expensive. Returning None means "unknown", so
-    /// entries are always counted - the same behaviour as `dir /s`.
-    // file_id()/nlink() only exist for Unix now: everywhere else the work is
-    // done by file_info() below.
+    /* file_id() and nlink() only exist for Unix (they come straight from the
+    stat struct). Here everything goes through file_info() below, which needs
+    the path because Windows requires a handle. */
 
     /// std does not expose the file index or the link count on Windows, so a
     /// handle is needed. `BY_HANDLE_FILE_INFORMATION` carries both, plus the

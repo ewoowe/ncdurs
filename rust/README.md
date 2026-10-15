@@ -198,7 +198,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | 平台 | "磁盘占用"取值方式 | 硬链接去重 | 状态 |
 | --- | --- | --- | --- |
 | Linux / macOS / *BSD | `st_blocks * 512` | `(st_dev, st_ino)` + `st_nlink` | 本机（Linux）已验证运行 |
-| Windows | `GetCompressedFileSizeW`（实际分配大小，兼容稀疏/压缩文件） | **暂未实现** | 通过 `cargo check`，未在真机运行 |
+| Windows | `GetCompressedFileSizeW`（实际分配大小，兼容稀疏/压缩文件） | 已实现 | 失败时回退到逻辑大小（同时检查 `INVALID_FILE_SIZE` 与 `GetLastError`，目录走这条路径） |
 
 所有平台差异集中在 `src/platform.rs`（三个函数：`disk_usage` / `file_id` / `nlink`）。Windows 侧 `std` 的 `file_index()` / `number_of_links()` 仍不稳定（rust#63010），正确识别硬链接需要为每个文件打开句柄，代价较大，因此 Windows 上同一文件的多个硬链接会被重复计数（行为等同 `dir /s`）。
 
@@ -364,9 +364,8 @@ cargo check --target x86_64-pc-windows-msvc
 
 待实现（按优先级）：
 
-1. Windows：实际分配大小（`GetCompressedFileSizeW`，兼容稀疏与压缩文件）—— C 版经由 Cygwin 的 POSIX 层拿到 `st_blocks * 512`，我们原生 Windows 目前用的是 `metadata.len()`（逻辑大小），所以稀疏文件的 `dsize` 会偏大；
-3. （可选）内核调用优化：用 `openat`/`fstatat` 或 libc 直调替代 std 的 `statx`；
-4. （可选）arena 垃圾回收（compact），回收删除/刷新留下的不可达节点。
+1. （可选）内核调用优化：用 `openat`/`fstatat` 或 libc 直调替代 std 的 `statx`；
+2. （可选）arena 垃圾回收（compact），回收删除/刷新留下的不可达节点。
 
 ## 许可
 

@@ -162,6 +162,21 @@ metric() {
   esac
 }
 
+# 从导出文件里算出总量：`export_value <file> dsize|asize|items`。
+#
+# 导出里没有"总量"字段 —— 每个条目（包括根目录）写的是它**自身**的大小，
+# 所以总量要**累加**全部条目。硬链接已经去重，因此累加值就是界面底栏和
+# `du` 看到的那个总量。这是数值对比的数据来源：确定性，不受渲染方式或
+# 扫描快慢影响。
+export_value() {
+  local f="$1" key="$2"
+  case "$key" in
+    dsize) grep -aoE '"dsize":[0-9]+' "$f" | grep -aoE '[0-9]+$' | awk '{s += $1} END {print s + 0}' ;;
+    asize) grep -aoE '"asize":[0-9]+' "$f" | grep -aoE '[0-9]+$' | awk '{s += $1} END {print s + 0}' ;;
+    items) grep -ao '"name"' "$f" | wc -l ;;
+  esac
+}
+
 # du 的 disk usage（字节）：块数 × 512，与 ncdu 的 dsize 口径一致
 du_bytes() { du -s -B512 "$1" 2>/dev/null | awk '{print $1 * 512}'; }
 
@@ -187,18 +202,41 @@ compare_dir() {  # compare_dir <标签> <目录>
     return
   fi
 
+  # 数值取自导出文件，而不是抓屏解析界面文字。
+  #
+  # 抓屏需要"等界面画完"，对扫描慢的目录（/usr 要两三秒）会抓不到内容，而
+  # 空值互相比较会伪装成通过 —— 那是最糟的一种失败。导出是确定性的，而且与
+  # 渲染方式无关；"界面上那个数字显示得对不对"由 src/ui.rs 的 TestBackend
+  # 断言负责，这里不再重复那条路径。
+  local c_json="$TMP/c-scan.json" r_json="$TMP/r-scan.json"
+  if ! "$C_BIN" -0 -o - "$dir" >"$c_json" 2>/dev/null; then
+    echo "  跳过：C 版导出失败（$dir）"
+    return
+  fi
+  if ! "$RUST_BIN" -0 -o - "$dir" >"$r_json" 2>/dev/null; then
+    check "$label: ncdurs 导出" "成功" "失败"
+    return
+  fi
+
+  # 界面仍然各跑一次，但只断言"画出来了东西"，不解析其中的数值。
   run_tui "$C_BIN"    "$dir" "$TMP/c.raw" "$TMP/c.err"
   run_tui "$RUST_BIN" "$dir" "$TMP/r.raw" "$TMP/r.err"
   clean_out "$TMP/c.raw" >"$TMP/c.txt"
   clean_out "$TMP/r.raw" >"$TMP/r.txt"
+  local c_bytes r_bytes
+  c_bytes=$(wc -c <"$TMP/c.raw")
+  r_bytes=$(wc -c <"$TMP/r.raw")
+  if [ "$c_bytes" -lt 200 ] || [ "$r_bytes" -lt 200 ]; then
+    check "$label: 界面有输出" "≥200 字节（两版）" "C 版 ${c_bytes} / ncdurs ${r_bytes} 字节"
+  fi
 
   local c_disk r_disk c_app r_app c_items r_items ref_bytes ref_human
-  c_disk="$(metric "$TMP/c.txt" disk)"
-  r_disk="$(metric "$TMP/r.txt" disk)"
-  c_app="$(metric "$TMP/c.txt" apparent)"
-  r_app="$(metric "$TMP/r.txt" apparent)"
-  c_items="$(metric "$TMP/c.txt" items)"
-  r_items="$(metric "$TMP/r.txt" items)"
+  c_disk="$(human_size "$(export_value "$c_json" dsize)")"
+  r_disk="$(human_size "$(export_value "$r_json" dsize)")"
+  c_app="$(human_size "$(export_value "$c_json" asize)")"
+  r_app="$(human_size "$(export_value "$r_json" asize)")"
+  c_items="$(export_value "$c_json" items)"
+  r_items="$(export_value "$r_json" items)"
   ref_bytes="$(du_bytes "$dir")"
   ref_human="$(human_size "${ref_bytes:-0}")"
 

@@ -5,8 +5,8 @@
 代码位于本仓库的 `rust/` 子目录，与 C 版源码、Autotools 构建完全独立：`cargo` 只针对 `rust/`，C 版仍用 `./configure && make`，两者互不影响。
 
 > 当前状态：**P0 + 扫描体验 + 删除/刷新/开 shell + 导出/导入 + 排除规则 + 扩展信息（`-e`）+ 界面与 C 版对齐 + 颜色主题**。可以扫描目录（带进度页、可随时中止）、交互浏览（五列：flag / 大小 / 图形 / itemcount / mtime；四个排序列 + 目录优先 + 自然序 + 隐藏过滤）、切换大小口径、删除条目（带确认）、重扫当前目录、在当前目录开 shell、与 C 版格式互通的导出/导入，以及按模式 / 缓存标记 / 文件系统边界排除；界面（列布局、底栏、扫描页与消息/确认框的居中窗口、`..` 项、帮助页、`i` 信息框）与 C 版逐项对齐，`--color` 提供 off / dark / dark-bg / auto 四档，终端输出使用与 ncurses 相同的**经典 8 色码**；数值与 C 版一致，扫描性能也与 C 版同一量级（见「性能对比」）。
-> 已通过与 C 版的自动化对比（`scripts/compare.sh`：数值、边界用例、性能、双向导出/导入）以及 30 个单元测试。
-> 尚未实现的都是次要开关（`--graph-style`、命令行版 `--sort`、部分 `--enable-*` 禁用开关等），见文末「待实现」。
+> 已通过与 C 版的自动化对比（`scripts/compare.sh`：数值、边界用例、性能、双向导出/导入）以及 33 个单元测试；CI 在 Linux / macOS / Windows 三平台跑 fmt、clippy（`-D warnings`）、单元测试与 MSRV 检查，另有 interop 作业与 C 版做互通对照。
+> 手册的选项表 59 项中已实现 58 项，唯一未实现的是 macOS 专有的 `--exclude-firmlinks`；其余待办是 Windows 平台细节与可选的性能优化，见文末「已知限制与待实现」。
 
 ## 构建与运行
 
@@ -95,33 +95,13 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 - 硬链接只计一次；符号链接不跟随；读不了/被拒绝的条目显示为 `[error]` 并继续扫描（均在扫描结束时汇总提示）。
 - 尺寸口径、目录自身块计入父目录等语义与 C 版 `src/dir_scan.c` / `src/dir_mem.c` 保持一致。
 
-### 硬链接记账方式（2026-10-15 起与 C 版逐字节对齐）
+### 硬链接记账方式（与 C 版逐字节对齐）
 
-> 下表是**对齐之前**的记录，保留作参考。现在两版在硬链接上行为完全相同：**每条链接都保留自己的大小**（列表与导出都如此）、导出条目带 `ino`/`hlnkc`/`nlink`、界面显示 `H` 标记，且「导出 → 导入 → 导出」与 C 版逐字节一致，只有总量按一次计入。
+同一个 inode 的多个硬链接：**每条链接都保留自己的大小** —— 列表里各显示各的，导出条目也各带各的 `asize`/`dsize` 与 `ino`/`hlnkc`/`nlink`；而**总量只按一次计入**，重复的那条不计入父目录的累加（`Node.counted`），界面在它旁边标 `H`。
 
-同一个 inode 有多个硬链接时，两版的**根总量一致**，但"这份大小算给哪个目录、导出时怎么记录"的规则不同 —— 根源是**去重决策发生的阶段不同**：
+这与 C 版的机制一致：去重不是靠"把重复链接的大小写成 0"，而是靠 `ino`/`hlnkc`/`nlink` 让读取方知道该计几次。跨目录硬链接、`H` 标记，以及「C 版导出 → ncdurs 导入 → 再导出」的逐条保真都已对齐；实测见 `scripts/compare.sh` 的「跨目录硬链接」一段。
 
-| | C 版 ncdu 1.22 | ncdurs |
-| --- | --- | --- |
-| 决策阶段 | **累加阶段**：`dir_mem.c::item()` 先只给父链加 items，再由 `hlink_check()` 决定在**哪些祖先链**上补加字节 | **赋值阶段**：重复链接的自身大小直接写 0，之后照常累加 |
-| 节点里存的 | 永远是**自身大小**（是否计入父级推迟到累加时判断） | **子树汇总值**（后序回填），重复链接为 0 |
-| 跨目录硬链接 | 每条祖先链各计一次：`a/f1` 与 `b/f2` 同 inode 时，`a`、`b` 都显示完整大小 | 全局只计一次：先扫到的目录得到完整大小，另一个只剩目录自身块 |
-| 界面标记 | 重复链接旁标 `H`（提示此处未重复计入） | 无标记 |
-| 导出文件 | 每条链接都写出自身大小 + `ino`/`hlnkc`/`nlink`，由读取方去重，信息无损 | 只保留被计入那条的大小，重复链接的大小已折叠为 0（该字段在再导出时丢失） |
-
-实测（`a/f1` 与 `b/f2` 同一 inode、各 1 MiB；`scripts/compare.sh` 会打印同样的对比）：
-
-```text
-导出文件里的两个条目：
-  C 版   {"name":"f2","asize":1048576,"dsize":1048576,"ino":1602778,"hlnkc":true,"nlink":2}
-         {"name":"f1","asize":1048576,"dsize":1048576,"ino":1602778,"hlnkc":true,"nlink":2}
-  ncdurs {"name":"f2","asize":1048576,"dsize":1048576}
-         {"name":"f1"}
-```
-
-影响范围：根总量、`du` 对照、导出文件的根尺寸与条目数都不受影响；受影响的是跨目录硬链接的子目录数值、第二条链接的显示，以及"C 版导出 → ncdurs 导入 → 再导出"的逐条保真。要对齐需要把去重决策挪回累加阶段（`Node` 增加 `hlnkc`/`ino`、逐祖先链判断，并连带修改删除/刷新的扣减与 UI 标记），已列为待实现中的可选项。
-
-除硬链接之外，我们的导出文件与 C 版**逐字节一致**：同一目录下 `ncdurs -o` 与 `ncdu -o -` 的输出，去掉 `progname`/`progver`/`timestamp`/`dev` 后 diff 为空。符号链接等"非普通文件"的 `notreg` 标记、`read_error`、字符串转义、零值字段省略都已对齐（验证方法见「测试」一节）。
+我们的导出文件与 C 版**逐字节一致**：同一目录下 `ncdurs -o` 与 `ncdu -o -` 的输出，去掉 `progname`/`progver`/`timestamp` 与 `dev` 后 diff 为空（`dev` 是我们有意不保存的字段）。符号链接等「非普通文件」的 `notreg`、`read_error`、`excluded` 的三种取值（`pattern`/`otherfs`/`kernfs`）、硬链接的 `ino`/`hlnkc`/`nlink`、扩展信息（`-e` 的 `uid`/`gid`/`mode`/`mtime`）、字符串转义、零值字段省略都已对齐（验证方法见「测试」一节）。
 
 ### 命令行选项
 
@@ -244,7 +224,12 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 
 ## 测试
 
-单元测试（大小向上累加、硬链接只计一次、非普通文件的 `notreg` 标记、分步扫描与一次性扫描等价、中止/结束都恢复工作目录、删除子树后祖先扣减、重扫后子树替换一致、刷新拾取新文件、导出格式与导出/导入往返、导入解析与转义/硬链接去重/非法输入、`NCDU_LEVEL` 语义）：
+单元测试 33 个：
+
+- **扫描**：大小向上累加、硬链接只计一次且每条保留自身大小、非普通文件的 `notreg`、排除规则不计入且不深入、`-L` 只跟随指向文件的链接、分步与一次性扫描等价、中止/结束都恢复工作目录、删除子树后祖先扣减、重扫后子树替换一致、刷新拾取新文件；
+- **导出 / 导入**：导出格式逐字段、往返一致、转义与代理对、`excluded` 的三种取值、硬链接字段、小数形式的 `mtime`、非法输入；
+- **其他**：glob 匹配、`CACHEDIR.TAG` 签名、命令行展开（`-1xo-` / `-Xpatterns` / `--sort=name`）、配置文件解析、`NCDU_LEVEL` 语义；
+- **界面渲染**（`TestBackend` 断言 buffer）：状态行与底栏的底色铺满整行、最大条目的图形条满格、mtime 列落在图形与名称之间。
 
 ```bash
 cd rust
@@ -284,16 +269,16 @@ cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo te
 推一个 tag 会触发 `.github/workflows/release.yml`，构建三平台二进制并附到对应 Release：
 
 ```bash
-git tag rust-v0.1.0
-git push ewoowe rust-v0.1.0
+git tag rust-v0.2.0
+git push ewoowe rust-v0.2.0
 ```
 
 `rust-v` 前缀是为了与上游 ncdu 的 tag 区分开。产物（`strip` 已开启，每个约 1 MB）：
 
 ```
-ncdurs-0.1.0-x86_64-unknown-linux-gnu.tar.gz
-ncdurs-0.1.0-aarch64-apple-darwin.tar.gz
-ncdurs-0.1.0-x86_64-pc-windows-msvc.zip
+ncdurs-0.2.0-x86_64-unknown-linux-gnu.tar.gz
+ncdurs-0.2.0-aarch64-apple-darwin.tar.gz
+ncdurs-0.2.0-x86_64-pc-windows-msvc.zip
 ```
 
 每个包里是 `ncdurs`（Windows 为 `ncdurs.exe`）与 `README.md`。手动触发该工作流（Actions → release → Run workflow）只构建归档并作为 workflow artifact 上传，**不会**发 Release。

@@ -308,6 +308,8 @@ pub struct ScanOptions {
     pub follow_symlinks: bool,
     /// `--follow-firmlinks` (the default) vs `--exclude-firmlinks`, macOS only.
     pub follow_firmlinks: bool,
+    /// `-e`: collect uid/gid/mode/mtime for every entry.
+    pub extended: bool,
 }
 
 impl Default for ScanOptions {
@@ -316,16 +318,16 @@ impl Default for ScanOptions {
             excludes: Excludes::default(),
             one_file_system: false,
             exclude_caches: false,
+            exclude_kernfs: false,
             follow_symlinks: false,
-            // Firmlinks are followed unless asked otherwise (main.c:45). Deriving
-            // Default would set this to false, which on macOS turns every path
-            // below a firmlink (/private, /Users, ...) into a skipped directory.
+            // Firmlinks are followed unless asked otherwise (main.c:45). A
+            // derived Default would make this false, and on macOS that turns
+            // every path below a firmlink (/private, /Users, ...) into a
+            // directory that is silently not scanned.
             follow_firmlinks: true,
             extended: false,
         }
     }
-    /// `-e`: collect uid/gid/mode/mtime for every entry.
-    pub extended: bool,
 }
 
 struct Frame {

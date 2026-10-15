@@ -390,7 +390,7 @@ impl Scanner {
             bytes: 0,
             start_cwd,
             options,
-            root_dev: platform::file_id(&md).map(|(dev, _)| dev),
+            root_dev: platform::file_info(&md, path).map(|info| info.dev),
             done: false,
             failed: None,
         };
@@ -617,7 +617,9 @@ impl Scanner {
                     // Keep the entry, skip the contents and mark it '^'.
                     kernfs = true;
                     skip_contents = true;
-                } else if self.options.one_file_system && self.on_other_filesystem(&md) {
+                } else if self.options.one_file_system
+                    && self.on_other_filesystem(&md, Path::new(self.tree.name_of(name_ref)))
+                {
                     othfs = true;
                     skip_contents = true;
                 } else if self.options.exclude_caches
@@ -631,9 +633,12 @@ impl Scanner {
 
         // Count a file with multiple hard links only once. If the platform
         // cannot provide a stable file identity, no de-duplication is attempted.
+        // One file_info() call per entry: on Windows it opens a handle, so it
+        // must not be repeated. The result is reused below for the H flag.
+        let info = platform::file_info(&md, Path::new(self.tree.name_of(name_ref)));
         let dup = !is_dir
-            && platform::nlink(&md) > 1
-            && platform::file_id(&md).is_some_and(|id| !self.links.insert(id));
+            && info.is_some_and(|i| i.nlink > 1)
+            && info.is_some_and(|i| !self.links.insert((i.dev, i.ino)));
         // The C version keeps the sizes at zero for entries it does not scan
         // (src/dir_scan.c:133: FF_OTHFS, FF_EXL and FF_KERNFS all skip it).
         // A repeated hard link is *not* one of them: every link carries its own
@@ -682,10 +687,10 @@ impl Scanner {
             // Hard link bookkeeping: the C version sets FF_HLNKC for non
             // directories with nlink > 1 and exports ino/hlnkc/nlink for them.
             if !is_dir {
-                let links = platform::nlink(&md);
+                let links = info.map_or(1, |i| i.nlink);
                 n.hlnkc = links > 1;
                 n.nlink = links as u32;
-                n.ino = platform::file_id(&md).map_or(0, |(_, ino)| ino);
+                n.ino = info.map_or(0, |i| i.ino);
             }
         }
 
@@ -804,9 +809,9 @@ impl Scanner {
     }
 
     /// True when `md` lives on another filesystem than the scan root (`-x`).
-    fn on_other_filesystem(&self, md: &fs::Metadata) -> bool {
-        match (self.root_dev, platform::file_id(md)) {
-            (Some(root), Some((dev, _))) => dev != root,
+    fn on_other_filesystem(&self, md: &fs::Metadata, path: &Path) -> bool {
+        match (self.root_dev, platform::file_info(md, path)) {
+            (Some(root), Some(info)) => info.dev != root,
             _ => false,
         }
     }

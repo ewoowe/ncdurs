@@ -37,6 +37,17 @@ mod imp {
         md.nlink()
     }
 
+    /// Identity and link count, all straight from the stat struct; the path is
+    /// not needed on Unix.
+    pub fn file_info(md: &Metadata, _path: &Path) -> Option<FileInfo> {
+        let (dev, ino) = file_id(md)?;
+        Some(FileInfo {
+            dev,
+            ino,
+            nlink: nlink(md),
+        })
+    }
+
     /// The `-e` fields: they all come straight from the stat struct.
     pub fn ext_info(md: &Metadata) -> Option<ExtInfo> {
         Some(ExtInfo {
@@ -84,12 +95,84 @@ mod imp {
     /// getting them through the Win32 API requires opening a handle for every
     /// single entry, which is expensive. Returning None means "unknown", so
     /// entries are always counted - the same behaviour as `dir /s`.
-    pub fn file_id(_md: &Metadata) -> Option<(u64, u64)> {
-        None
-    }
+    // file_id()/nlink() only exist for Unix now: everywhere else the work is
+    // done by file_info() below.
 
-    pub fn nlink(_md: &Metadata) -> u64 {
-        1
+    /// std does not expose the file index or the link count on Windows, so a
+    /// handle is needed. `BY_HANDLE_FILE_INFORMATION` carries both, plus the
+    /// volume serial number - the same three values the C version gets from
+    /// Cygwin's POSIX layer, which is why hard links are de-duplicated there.
+    pub fn file_info(_md: &Metadata, path: &Path) -> Option<FileInfo> {
+        use std::os::windows::ffi::OsStrExt;
+
+        // Declared here rather than pulled from windows-sys: CreateFileW wants
+        // SECURITY_ATTRIBUTES, which would drag in the whole Win32_Security
+        // feature just for a null pointer.
+        #[repr(C)]
+        struct HandleFileInfo {
+            file_attributes: u32,
+            creation_time: [u32; 2],
+            last_access_time: [u32; 2],
+            last_write_time: [u32; 2],
+            volume_serial_number: u32,
+            file_size_high: u32,
+            file_size_low: u32,
+            number_of_links: u32,
+            file_index_high: u32,
+            file_index_low: u32,
+        }
+
+        const FILE_READ_ATTRIBUTES: u32 = 0x0080;
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+        const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+        const OPEN_EXISTING: u32 = 3;
+        // Without this, directories cannot be opened at all.
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        const INVALID_HANDLE_VALUE: usize = usize::MAX;
+
+        unsafe extern "system" {
+            fn CreateFileW(
+                lpfile_name: *const u16,
+                desired_access: u32,
+                share_mode: u32,
+                security_attributes: *const std::ffi::c_void,
+                creation_disposition: u32,
+                flags_and_attributes: u32,
+                template_file: usize,
+            ) -> usize;
+            fn GetFileInformationByHandle(handle: usize, info: *mut HandleFileInfo) -> i32;
+            fn CloseHandle(handle: usize) -> i32;
+        }
+
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        // A handle per entry is not cheap, which is why the scanner calls this
+        // once per entry and reuses the result.
+        unsafe {
+            let handle = CreateFileW(
+                wide.as_ptr(),
+                FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS,
+                0,
+            );
+            if handle == INVALID_HANDLE_VALUE {
+                return None;
+            }
+            let mut raw: HandleFileInfo = std::mem::zeroed();
+            let ok = GetFileInformationByHandle(handle, &mut raw);
+            CloseHandle(handle);
+            if ok == 0 {
+                return None;
+            }
+            Some(FileInfo {
+                dev: raw.volume_serial_number as u64,
+                ino: ((raw.file_index_high as u64) << 32) | raw.file_index_low as u64,
+                nlink: raw.number_of_links as u64,
+            })
+        }
     }
 
     /// Windows has no uid/gid/mode; the C version does not show them either.
@@ -108,20 +191,32 @@ mod imp {
         md.len()
     }
 
-    pub fn file_id(_md: &Metadata) -> Option<(u64, u64)> {
-        None
-    }
-
-    pub fn nlink(_md: &Metadata) -> u64 {
-        1
-    }
+    // file_id()/nlink() only exist for Unix now: everywhere else the work is
+    // done by file_info() below.
 
     pub fn ext_info(_md: &Metadata) -> Option<ExtInfo> {
         None
     }
+
+    /// The fallback has no identity to offer, so nothing is de-duplicated.
+    pub fn file_info(_md: &Metadata, _path: &Path) -> Option<FileInfo> {
+        None
+    }
 }
 
-pub use imp::{disk_usage, ext_info, file_id, nlink};
+pub use imp::{disk_usage, ext_info, file_info};
+
+/// Identity and link count of one file - the three things the scanner needs to
+/// de-duplicate hard links.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileInfo {
+    /// Device (Unix) or volume serial number (Windows).
+    pub dev: u64,
+    /// Inode (Unix) or file index (Windows).
+    pub ino: u64,
+    /// Number of hard links.
+    pub nlink: u64,
+}
 
 /// True when `path` is reached through a firmlink (`--exclude-firmlinks`,
 /// macOS only).

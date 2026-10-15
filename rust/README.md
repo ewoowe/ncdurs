@@ -169,7 +169,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | 特性 | 原版 | ncdurs |
 | --- | --- | --- |
 | 扫描进度页（当前路径 / 条目数 / 已扫大小 / 可中止） | 支持 | 已实现 |
-| 硬链接去重 | 支持（并标记 `H`） | 支持（Unix；Windows 暂缺，且无标记） |
+| 硬链接去重 | 支持（并标记 `H`） | 已实现：Unix 用 `st_ino`/`st_nlink`，Windows 用 `GetFileInformationByHandle` 取文件索引与链接数（每个条目一次句柄，结果复用） |
 | 条目状态标记（`!` `.` `<` `e` `>` `@` `^` `H` `F`） | 9 种，显示在名称前 | **九种全部实现**：`!`（自己读取失败）、`.`（**后代**中有目录读取失败，尺寸可能不准）、`<`（被排除）、`>`（其它文件系统）、`^`（Linux 伪文件系统）、`H`（同一文件已计过，即重复的硬链接）、`F`（firmlink，仅 macOS）、`e`（空目录）、`@`（非普通文件） |
 | 配置文件（`/etc/ncdu.conf`、`$XDG_CONFIG_HOME/ncdu/config` 或 `~/.config/ncdu/config`） | 支持 | 已实现：每行一个选项（可含值，如 `--exclude .git`）、`#` 注释、空行忽略、行首 `@` 表示该行允许文件不存在（手册的例子 `@--exclude-from ~/.ncduexcludes`）；**先系统级后用户级**，且**命令行参数优先于配置**。仓库里带了一份示例：`ncdu.conf.example`（全部注释掉，直接拷过去不改变任何行为）。**这份文件是本实现额外提供的** —— 原版没有示例文件，它只在 `ncdu.1` 的 CONFIGURATION FILE 段里内联了几行例子 |
 | 环境变量 `NCDU_SHELL`、`NCDU_LEVEL` | 支持 | 已实现（`b` 使用；`NCDU_LEVEL` 每次会话递增一次） |
@@ -364,7 +364,7 @@ cargo check --target x86_64-pc-windows-msvc
 
 待实现（按优先级）：
 
-1. Windows：硬链接去重与实际分配大小（`GetFileInformationByHandle` 取文件索引与链接数、`GetCompressedFileSizeW` 取分配大小）—— C 版经由 Cygwin 的 POSIX 层拿到 `st_ino`/`st_nlink`/`st_blocks`，我们原生 Windows 需要自己实现；
+1. Windows：实际分配大小（`GetCompressedFileSizeW`，兼容稀疏与压缩文件）—— C 版经由 Cygwin 的 POSIX 层拿到 `st_blocks * 512`，我们原生 Windows 目前用的是 `metadata.len()`（逻辑大小），所以稀疏文件的 `dsize` 会偏大；
 3. （可选）内核调用优化：用 `openat`/`fstatat` 或 libc 直调替代 std 的 `statx`；
 4. （可选）arena 垃圾回收（compact），回收删除/刷新留下的不可达节点。
 

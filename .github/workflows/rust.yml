@@ -64,10 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: install build tools and ncurses headers
-        run: |
-          sudo apt-get update && sudo apt-get install -y libncurses-dev autoconf automake ccache
-          # Keep it well inside the repository's 10 GB cache budget.
-          ccache --max-size=200M
+        run: sudo apt-get update && sudo apt-get install -y libncurses-dev autoconf automake
       # A fresh checkout only carries configure.ac and Makefile.am (configure,
       # Makefile.in and aclocal.m4 are gitignored), so autotools have to build
       # the build system first. This cache holds only that generated build
@@ -91,22 +88,10 @@ jobs:
           key: c-build-${{ runner.os }}-${{ hashFiles('configure.ac', 'Makefile.am', 'src/**') }}
           restore-keys: |
             c-build-${{ runner.os }}-
-      # ccache is what actually speeds up the C build: it keys on the content of
-      # the translation units, so the timestamps a fresh checkout stamps onto
-      # the sources do not matter (object files from a fixed-key cache would
-      # always look stale and be rebuilt).
-      #
-      # Its cache has to be written back after every run, so the key carries the
-      # run id - a fixed key would always hit and therefore never be saved.
-      # restore-keys pick up the most recent one instead.
-      - name: cache ccache
-        uses: actions/cache@v6
-        with:
-          path: ~/.ccache
-          key: ccache-${{ runner.os }}-${{ hashFiles('configure.ac', 'Makefile.am', 'src/**') }}-${{ github.run_id }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ hashFiles('configure.ac', 'Makefile.am', 'src/**') }}-
-            ccache-${{ runner.os }}-
+      # The C version is only a dozen translation units and compiles in a few
+      # seconds, so it is not worth caching the object files (a fixed-key cache
+      # would also never hit: a fresh checkout stamps the sources with the
+      # current time, making every cached .o look stale).
       - name: bootstrap and configure the C version
         working-directory: .
         run: |
@@ -117,7 +102,7 @@ jobs:
           if [ ! -x ./configure ] || [ ! -f ./install-sh ]; then
             autoreconf -i
           fi
-          CC="ccache cc" ./configure
+          ./configure
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

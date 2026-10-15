@@ -6,7 +6,7 @@
 
 > 当前状态：**P0 + 扫描体验 + 删除/刷新/开 shell + 导出/导入 + 排除规则 + 扩展信息（`-e`）+ 界面与 C 版对齐 + 颜色主题**。可以扫描目录（带进度页、可随时中止）、交互浏览（五列：flag / 大小 / 图形 / itemcount / mtime；四个排序列 + 目录优先 + 自然序 + 隐藏过滤）、切换大小口径、删除条目（带确认）、重扫当前目录、在当前目录开 shell、与 C 版格式互通的导出/导入，以及按模式 / 缓存标记 / 文件系统边界排除；界面（列布局、底栏、扫描页与消息/确认框的居中窗口、`..` 项、帮助页、`i` 信息框）与 C 版逐项对齐，`--color` 提供 off / dark / dark-bg / auto 四档，终端输出使用与 ncurses 相同的**经典 8 色码**；数值与 C 版一致，扫描性能也与 C 版同一量级（见「性能对比」）。
 > 已通过与 C 版的自动化对比（`scripts/compare.sh`：数值、边界用例、性能、双向导出/导入）以及 33 个单元测试；CI 在 Linux / macOS / Windows 三平台跑 fmt、clippy（`-D warnings`）、单元测试与 MSRV 检查，另有 interop 作业与 C 版做互通对照。
-> 手册的选项表 59 项中已实现 58 项，唯一未实现的是 macOS 专有的 `--exclude-firmlinks`；其余待办是 Windows 平台细节与可选的性能优化，见文末「已知限制与待实现」。
+> 手册的选项表 59 项**已全部实现**，九种条目状态标记也都可显示；剩余待办只有 Windows 平台细节与可选的性能优化，见文末「已知限制与待实现」。
 
 ## 构建与运行
 
@@ -81,7 +81,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 
 ## 与原版 ncdu（C 版 1.22）的对比
 
-下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项中已实现 58 项、部分实现 0 项、未实现 1 项（仅剩 macOS 专有的 `--exclude-firmlinks`）。
+下表以原版的 `ncdu.1` 手册与 `src/help.c` 为准逐项核对（「部分」= 能力等价但接口/平台有差异）。整体进度：约 59 项**全部实现** —— 原版 `ncdu.1` 手册里的选项与按键都已可用（其中 macOS 专有的 `--exclude-firmlinks` 只在 macOS 上产生实际效果，其他平台上是无操作）。
 
 ### 数值一致性
 
@@ -118,7 +118,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | `--exclude-caches` / `--include-caches` | 已实现 | 识别 `CACHEDIR.TAG` 的官方签名 |
 | `-L, --follow-symlinks` / `--no-follow-symlinks` | 已实现 | 指向**文件**的链接按目标计数（且不再是 `@`）；指向**目录**的链接永不跟随 —— 与 C 版逐字节一致 |
 | `--exclude-kernfs` / `--include-kernfs` | 已实现 | Linux：用 `statfs` 的 `f_type` 比对 12 个伪文件系统 magic（proc/sys/cgroup/cgroup2/debug/devpts/binfmt/bpf/pstore/security/selinux/trace）；不入内、不计入、标 `^`，导出 `"excluded":"kernfs"`（实测与 C 版逐字段一致） |
-| `--exclude-firmlinks` / `--follow-firmlinks`（macOS） | 未实现 | |
+| `--exclude-firmlinks` / `--follow-firmlinks`（macOS） | 已实现 | 用 `getattrlist(ATTR_CMNEXT_NOFIRMLINKPATH)` 返回的路径与传入路径比较来判断；命中时不进入、标 `F`，但**保留自身大小**（`dir_scan.c:133` 的归零列表不含 `FF_FRMLNK`）；默认**跟随**（`main.c:45`），所以只有显式开启才出现 `F` |
 | `-0` / `-1` / `-2`（UI 级别） | 已实现 | `-0` 扫描期间完全不绘制（实测：默认输出 5161 字节 vs `-0` 的 36 字节）；`-1` 输出纯文本进度行到 **stderr**（路径 + 文件数 + 累计尺寸，`\r` 覆盖同一行，所以 stdout 仍是干净的 JSON），`-2` 走全屏界面 |
 | `-q, --slow-ui-updates` / `--fast-ui-updates` | 已实现 | 刷新间隔 2 s ↔ 50 ms |
 | `--enable-shell` / `--disable-shell` | 已实现 | 门控 `b` 键，禁用时弹 `Shell feature disabled.` |
@@ -170,7 +170,7 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | --- | --- | --- |
 | 扫描进度页（当前路径 / 条目数 / 已扫大小 / 可中止） | 支持 | 已实现 |
 | 硬链接去重 | 支持（并标记 `H`） | 支持（Unix；Windows 暂缺，且无标记） |
-| 条目状态标记（`!` `.` `<` `e` `>` `@` `^` `H` `F`） | 9 种，显示在名称前 | 已实现八种：`!`（自己读取失败）、`.`（**后代**中有目录读取失败，尺寸可能不准）、`<`（被排除）、`>`（其它文件系统）、`^`（Linux 伪文件系统）、`H`（同一文件已计过，即重复的硬链接）、`e`（空目录）、`@`（非普通文件）。仅缺 `F`（firmlink，需要 macOS 的 `--exclude-firmlinks`） |
+| 条目状态标记（`!` `.` `<` `e` `>` `@` `^` `H` `F`） | 9 种，显示在名称前 | **九种全部实现**：`!`（自己读取失败）、`.`（**后代**中有目录读取失败，尺寸可能不准）、`<`（被排除）、`>`（其它文件系统）、`^`（Linux 伪文件系统）、`H`（同一文件已计过，即重复的硬链接）、`F`（firmlink，仅 macOS）、`e`（空目录）、`@`（非普通文件） |
 | 配置文件（`/etc/ncdu.conf`、`$XDG_CONFIG_HOME/ncdu/config` 或 `~/.config/ncdu/config`） | 支持 | 已实现：每行一个选项（可含值，如 `--exclude .git`）、`#` 注释、空行忽略、行首 `@` 表示该行允许文件不存在（手册的例子 `@--exclude-from ~/.ncduexcludes`）；**先系统级后用户级**，且**命令行参数优先于配置**。仓库里带了一份示例：`ncdu.conf.example`（全部注释掉，直接拷过去不改变任何行为）。**这份文件是本实现额外提供的** —— 原版没有示例文件，它只在 `ncdu.1` 的 CONFIGURATION FILE 段里内联了几行例子 |
 | 环境变量 `NCDU_SHELL`、`NCDU_LEVEL` | 支持 | 已实现（`b` 使用；`NCDU_LEVEL` 每次会话递增一次） |
 | 导出 / 导入 JSON | 支持 | 已实现（与 C 版双向互通，见「用法」） |
@@ -364,8 +364,7 @@ cargo check --target x86_64-pc-windows-msvc
 
 待实现（按优先级）：
 
-1. `--exclude-firmlinks`（macOS 专有，需要在 macOS 上验证）；
-2. Windows 硬链接去重、Windows 隐藏/系统属性过滤（CI 已有 Windows 真机可验证）；
+1. Windows：硬链接去重与实际分配大小（`GetFileInformationByHandle` 取文件索引与链接数、`GetCompressedFileSizeW` 取分配大小）—— C 版经由 Cygwin 的 POSIX 层拿到 `st_ino`/`st_nlink`/`st_blocks`，我们原生 Windows 需要自己实现；
 3. （可选）内核调用优化：用 `openat`/`fstatat` 或 libc 直调替代 std 的 `statx`；
 4. （可选）arena 垃圾回收（compact），回收删除/刷新留下的不可达节点。
 

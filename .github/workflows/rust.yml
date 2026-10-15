@@ -64,20 +64,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: install build tools and ncurses headers
-        run: sudo apt-get update && sudo apt-get install -y libncurses-dev autoconf automake ccache
+        run: |
+          sudo apt-get update && sudo apt-get install -y libncurses-dev autoconf automake ccache
+          # Keep it well inside the repository's 10 GB cache budget.
+          ccache --max-size=200M
       # A fresh checkout only carries configure.ac and Makefile.am (configure,
       # Makefile.in and aclocal.m4 are gitignored), so autotools have to build
-      # the build system first. Caching it *together with the object files*
-      # keeps the interop job from recompiling ncdu on every run: the key
-      # covers the sources, so a change recompiles exactly what make considers
-      # stale, and an unchanged tree is not compiled at all.
-      - name: cache the C build
+      # the build system first. This cache holds only that generated build
+      # system: a fixed key is right here, because it never has to be written
+      # back.
+      - name: cache the generated build system
         uses: actions/cache@v6
         with:
-          # The object files are deliberately *not* cached: a fresh checkout
-          # stamps the sources with the current time, so make would rebuild
-          # everything anyway. ccache keys on content instead, which is what
-          # actually makes this job fast.
           path: |
             configure
             aclocal.m4
@@ -90,10 +88,25 @@ jobs:
             depcomp
             install-sh
             missing
-            ~/.ccache
           key: c-build-${{ runner.os }}-${{ hashFiles('configure.ac', 'Makefile.am', 'src/**') }}
           restore-keys: |
             c-build-${{ runner.os }}-
+      # ccache is what actually speeds up the C build: it keys on the content of
+      # the translation units, so the timestamps a fresh checkout stamps onto
+      # the sources do not matter (object files from a fixed-key cache would
+      # always look stale and be rebuilt).
+      #
+      # Its cache has to be written back after every run, so the key carries the
+      # run id - a fixed key would always hit and therefore never be saved.
+      # restore-keys pick up the most recent one instead.
+      - name: cache ccache
+        uses: actions/cache@v6
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-${{ hashFiles('configure.ac', 'Makefile.am', 'src/**') }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ hashFiles('configure.ac', 'Makefile.am', 'src/**') }}-
+            ccache-${{ runner.os }}-
       - name: bootstrap and configure the C version
         working-directory: .
         run: |

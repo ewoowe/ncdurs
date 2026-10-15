@@ -198,9 +198,9 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 | 平台 | "磁盘占用"取值方式 | 硬链接去重 | 状态 |
 | --- | --- | --- | --- |
 | Linux / macOS / *BSD | `st_blocks * 512` | `(st_dev, st_ino)` + `st_nlink` | 本机（Linux）已验证运行 |
-| Windows | `GetCompressedFileSizeW`（实际分配大小，兼容稀疏/压缩文件） | 已实现 | 失败时回退到逻辑大小（同时检查 `INVALID_FILE_SIZE` 与 `GetLastError`，目录走这条路径） |
+| Windows | `GetCompressedFileSizeW`（实际分配大小，兼容稀疏/压缩文件）；失败时回退到逻辑大小（目录走这条） | 卷序列号 + `GetFileInformationByHandle` 的文件索引与链接数 | 已实现；`cargo check` 与 CI 覆盖，未在真机长期运行 |
 
-所有平台差异集中在 `src/platform.rs`（三个函数：`disk_usage` / `file_id` / `nlink`）。Windows 侧 `std` 的 `file_index()` / `number_of_links()` 仍不稳定（rust#63010），正确识别硬链接需要为每个文件打开句柄，代价较大，因此 Windows 上同一文件的多个硬链接会被重复计数（行为等同 `dir /s`）。
+所有平台差异都集中在 `src/platform.rs`：`disk_usage`（磁盘占用）、`file_info`（设备号 / inode / 链接数，供硬链接去重使用）、`ext_info`（`-e` 的 uid/gid/mode/mtime）、`is_firmlink`（macOS）。Windows 侧 `std` 仍不暴露文件索引与链接数（rust#63010），所以 `file_info` 走 `CreateFileW` + `GetFileInformationByHandle`，**每个条目开一次句柄**（同一次扫描里结果会复用，不会重复开）。
 
 终端界面基于 `ratatui` + `crossterm`，Windows 的 ConHost / Windows Terminal 原生支持，无额外系统依赖。
 

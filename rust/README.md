@@ -23,6 +23,7 @@
 - [用法](#用法)
 - [与原版 ncdu 的对比](#与原版-ncdu-的对比)
 - [跨平台](#跨平台)
+- [文件类型与平台差异](#文件类型与平台差异)
 - [项目结构](#项目结构)
 - [测试](#测试)
 - [已知限制与待实现](#已知限制与待实现)
@@ -168,6 +169,64 @@ ncdurs -f old.json -o new.json      # 导入后再导出
 所有平台差异都集中在 `src/platform.rs`：`disk_usage`（磁盘占用）、`file_info`（设备号 / inode / 链接数，供硬链接去重使用）、`ext_info`（`-e` 的 uid/gid/mode/mtime）、`is_firmlink`（macOS）。Windows 侧 `std` 仍不暴露文件索引与链接数（rust#63010），所以 `file_info` 走 `CreateFileW` + `GetFileInformationByHandle`，**每个条目开一次句柄**（同一次扫描里结果会复用，不会重复开）。
 
 终端界面基于 `ratatui` + `crossterm`，Windows 的 ConHost / Windows Terminal 原生支持，无额外系统依赖。
+
+## 文件类型与平台差异
+
+这一节说明各平台上会遇到哪些文件类型、本项目如何处理，以及**为什么这样处理** —— 总原则是：与 C 版 ncdu 的行为保持一致（见文末「与 C 版的关系」）。
+
+### 大小口径
+
+| | Linux / macOS / *BSD | Windows |
+| --- | --- | --- |
+| 默认（`dsize`，"disk usage"） | `st_blocks × 512`，即**实际占用的块** | `GetCompressedFileSizeW()`，即**实际分配大小**（兼容稀疏文件与 NTFS 压缩文件）；调用失败时回退到逻辑大小（目录走这条） |
+| `-a` / `--apparent-size`（`asize`） | `st_size`，即逻辑大小 | 同左 |
+| 目录自身 | 目录自己的块计入它的总量（通常 4 KiB） | 同左（回退值为 0） |
+
+**稀疏文件**是两条口径差别最大的地方：一个 1 GiB 的稀疏文件 `dsize` 可能只有几 KiB，而 `asize` 是 1 GiB。`scripts/compare.sh` 的边界用例专门覆盖了这一点。
+
+### 文件类型
+
+| 类型 | 处理方式 | 标记 |
+| --- | --- | --- |
+| 普通文件 | 计入，按上表取大小 | — |
+| 目录 | 自身块计入父目录；进入并累加子项 | —（空目录为 `e`） |
+| **符号链接** | **默认不跟随**，按链接自身计入；`-L` 时若指向**文件**则按目标计入，指向**目录**的**永不跟随** | `@`（`notreg`） |
+| **硬链接** | 同一 inode 的**总量只计一次**，但每条链接在列表与导出里**都保留自身大小**；重复的那条标 `H` | `H` |
+| **fifo / socket / 设备节点** | 计入（尺寸通常为 0），不算普通文件 | `@` |
+| **稀疏文件** | `dsize` 按实际分配、`asize` 按逻辑大小（见上表） | — |
+| 符号链接环 | 因为不跟随，所以不会递归 | — |
+
+### 平台差异与注意事项
+
+**Linux**
+
+- **伪文件系统**（proc / sys / cgroup / cgroup2 / debugfs / devpts / binfmtfs / bpf / pstore / securityfs / selinuxfs / tracefs）不占磁盘，条目数却可能成千上万。用 `--exclude-kernfs` 跳过它们，标 `^`。判定靠 `statfs()` 返回的 `f_type` **魔数**而不是路径白名单 —— 伪文件系统可以挂在任意位置（容器、chroot、`mount --bind` 之后路径都会变），只有 fs 类型可靠。
+- **挂载点**：`-x` / `--one-file-system` 按**设备号**跳过其它文件系统（真实的其它分区、外接盘、tmpfs 都会跳过），标 `>`。它与 `--exclude-kernfs` 的区别是：前者砍掉所有非本设备的挂载，后者只砍内核伪文件系统、保留 `/home` 这类真实分区。
+- **权限不足的目录**：读不出来的那一层标 `!`；**它上面的所有祖先**标 `.`，提示"这个尺寸可能不准"（下面有东西没算进去）。
+
+**macOS**
+
+- **firmlink**：macOS 11+ 用 firmlink 把系统卷与数据卷缝合起来，所以 `/Users`、`/Applications`、`/private`、`/opt`、`/usr/local` 这些路径实际指向 `/System/Volumes/Data/...`。默认**跟随**（与 C 版一致），`--exclude-firmlinks` 则跳过并标 `F`（保留自身大小，只是不进入）。
+  判定用 `getattrlist(ATTR_CMNEXT_NOFIRMLINKPATH)`：它返回"未解析 firmlink"的路径，与传入路径不同就说明跨了 firmlink。注意 `ATTR_CMNEXT_*` 这类扩展属性需要 `options = FSOPT_ATTR_CMN_EXTENDED`（`0x20`），否则调用会失败。用内核查询而不是比较路径前缀，是因为 firmlink 可以出现在任意层级。
+- 扩展属性、资源分叉**不计入**大小（与 `du` 一致）。
+- 时间戳走 `localtime_r` + `strftime`，与 C 版**逐字符相同**（含时区偏移）。
+
+**Windows**
+
+- **硬链接**：NTFS 支持，但 Rust 的 `std` 不暴露文件索引，所以走 `CreateFileW` + `GetFileInformationByHandle` 取卷序列号、文件索引与链接数。**每个条目要开一次句柄**（这是它比 Linux/macOS 贵的地方），因此扫描时对一个条目只调用一次、结果在同一次扫描里复用。
+- **junction / reparse point**：会被当作目录进入（打开目录需要 `FILE_FLAG_BACKUP_SEMANTICS`），**没有**做环检测。与 C 版在 Cygwin 下的行为一致，但如果你自己造了 junction 环，扫描会进去。
+- **文件属性不过滤**：**不**按 `FILE_ATTRIBUTE_HIDDEN` / `SYSTEM` 隐藏条目。C 版也没有这个逻辑（它靠 Cygwin 的 POSIX 层，"隐藏"的判定与各平台一致：点开头、`~` 结尾、或被排除），所以这里保持一致；要隐藏请用 `--exclude`。
+- **`-e` 扩展信息不可用**：Windows 没有 POSIX 的 uid / gid / mode，`platform::ext_info()` 返回 `None`。信息框显示 `Type:` 而不是 `Mode:`/`UID:`/`GID:`，mtime 列也不会出现（它依赖 `-e`）。导出的 `uid`/`gid`/`mode`/`mtime` 字段同理。
+- 超长路径（超过 `MAX_PATH`）需要 `\\?\` 前缀，本项目未做特殊处理。
+
+### 与 C 版的关系
+
+功能与行为以 **C 版 ncdu 1.22**（本仓库的 `ncdu.1` 与 `src/`）为基准逐项对齐：数值、界面布局、按键、导出格式（**逐字节一致**，只差我们有意不写、也不是必需的 `dev` 字段）、条目状态标记、macOS firmlink 的处理方式。
+
+有一点值得特别注意：**C 版在 Windows 上是靠 Cygwin / MSYS2 编译的** —— 它的 `src/` 里没有任何 `windows.h` / `_WIN32` 代码，那些"Windows 上的行为"全部来自 Cygwin 模拟的 POSIX 层。本项目是**原生 Windows** 实现，因此：
+
+- 硬链接去重、实际分配大小这些能力要用 Win32 API 自己实现（结果与 C 版一致）；
+- 反过来，C 版没有的 Windows 特有行为（比如按隐藏属性过滤）**我们也不加**，以保持行为一致。
 
 ## 项目结构
 

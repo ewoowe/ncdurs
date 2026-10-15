@@ -1185,12 +1185,23 @@ mod tests {
         for p in probes {
             let yes = is_firmlink(Path::new(p));
             hits += usize::from(yes);
-            report.push_str(&format!("\n  {p} -> {yes}"));
+            // The raw syscall result, so a failure can be told apart from a
+            // plain "not a firmlink".
+            let plain = crate::platform::firmlink_path(Path::new(p), false);
+            let extended = crate::platform::firmlink_path(Path::new(p), true);
+            let show = |r: &Result<Vec<u8>, i32>| match r {
+                Ok(bytes) => format!("ok({})", String::from_utf8_lossy(bytes)),
+                Err(e) => format!("err({e})"),
+            };
+            report.push_str(&format!(
+                "\n  {p} -> {yes}  plain={}  extended={}",
+                show(&plain),
+                show(&extended)
+            ));
         }
         assert!(
             hits > 0,
-            "none of the known firmlink paths was recognised, so getattrlist() \
-             probably failed:{report}"
+            "none of the known firmlink paths was recognised:{report}"
         );
     }
 

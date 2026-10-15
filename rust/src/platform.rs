@@ -214,21 +214,18 @@ pub struct FileInfo {
     pub nlink: u64,
 }
 
-/// True when `path` is reached through a firmlink (`--exclude-firmlinks`,
-/// macOS only).
-///
-/// getattrlist() with ATTR_CMNEXT_NOFIRMLINKPATH hands back the path with
-/// firmlinks left unresolved, so a difference means the path crosses one -
-/// exactly what dir_scan.c:285-302 tests. On a stock macOS 11+ install this
-/// makes /Users, /Applications, /private, ... come back as
-/// /System/Volumes/Data/Users and so on.
+/// `getattrlist(ATTR_CMNEXT_NOFIRMLINKPATH)` - the path with firmlinks left
+/// unresolved - or the errno of the call. `extended` selects
+/// FSOPT_ATTR_CMN_EXTENDED, which the ATTR_CMNEXT_* attributes seem to need on
+/// at least some releases; dir_scan.c:285-302 passes 0.
 #[cfg(target_os = "macos")]
-pub fn is_firmlink(path: &Path) -> bool {
-    use std::ffi::{CString, OsStr};
+pub(crate) fn firmlink_path(path: &Path, extended: bool) -> Result<Vec<u8>, i32> {
+    use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
     const ATTR_BIT_MAP_COUNT: u16 = 5;
     const ATTR_CMNEXT_NOFIRMLINKPATH: u32 = 0x0000_0020;
+    const FSOPT_ATTR_CMN_EXTENDED: u64 = 0x0000_0020;
 
     #[repr(C)]
     struct AttrList {
@@ -241,9 +238,6 @@ pub fn is_firmlink(path: &Path) -> bool {
         forkattr: u32,
     }
 
-    // The kernel answers with { u_int32_t length; attrreference_t reference;
-    // char extra[] }, and attr_dataoffset is relative to the reference field
-    // itself - which sits 4 bytes into the buffer.
     unsafe extern "C" {
         fn getattrlist(
             path: *const libc::c_char,
@@ -254,9 +248,7 @@ pub fn is_firmlink(path: &Path) -> bool {
         ) -> libc::c_int;
     }
 
-    let Ok(cpath) = CString::new(path.as_os_str().as_bytes()) else {
-        return false;
-    };
+    let cpath = CString::new(path.as_os_str().as_bytes()).map_err(|_| libc::EINVAL)?;
     let mut list = AttrList {
         bitmapcount: ATTR_BIT_MAP_COUNT,
         reserved: 0,
@@ -264,31 +256,52 @@ pub fn is_firmlink(path: &Path) -> bool {
         volattr: 0,
         dirattr: 0,
         fileattr: 0,
+        // dir_scan.c puts it in forkattr, so this does too.
         forkattr: ATTR_CMNEXT_NOFIRMLINKPATH,
     };
     let mut buf = [0u8; 4096];
+    let options = if extended { FSOPT_ATTR_CMN_EXTENDED } else { 0 };
     let rc = unsafe {
         getattrlist(
             cpath.as_ptr(),
             (&mut list as *mut AttrList).cast(),
             buf.as_mut_ptr().cast(),
             buf.len(),
-            0,
+            options as libc::c_ulong,
         )
     };
     if rc != 0 {
-        return false;
+        return Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(-1));
     }
+    // The answer is { u_int32_t length; attrreference_t reference; char data[] },
+    // and attr_dataoffset counts from the attrreference_t itself - which starts
+    // 4 bytes into the buffer.
     let offset = i32::from_ne_bytes(buf[4..8].try_into().unwrap_or([0; 4]));
     let start = 4usize.wrapping_add(offset.max(0) as usize);
     if start >= buf.len() {
-        return false;
+        return Err(libc::EINVAL);
     }
     let tail = &buf[start..];
     let end = tail.iter().position(|&b| b == 0).unwrap_or(tail.len());
-    let returned = Path::new(OsStr::from_bytes(&tail[..end]));
-    // Compare the raw bytes, not the Paths.
-    returned.as_os_str().as_bytes() != path.as_os_str().as_bytes()
+    Ok(tail[..end].to_vec())
+}
+
+/// True when `path` is reached through a firmlink (`--exclude-firmlinks`,
+/// macOS only).
+///
+/// Both `getattrlist()` flavours are tried, so that a failing call can never be
+/// mistaken for "this path is not a firmlink".
+#[cfg(target_os = "macos")]
+pub fn is_firmlink(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+
+    for extended in [false, true] {
+        if let Ok(resolved) = firmlink_path(path, extended) {
+            // Compare raw bytes, not Paths.
+            return resolved != path.as_os_str().as_bytes();
+        }
+    }
+    false
 }
 
 #[cfg(not(target_os = "macos"))]
